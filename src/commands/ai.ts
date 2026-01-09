@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, AutocompleteInteraction } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, AutocompleteInteraction, EmbedBuilder } from 'discord.js';
 import axios from 'axios';
 import { prisma } from '../db';
 import { config } from '../config';
@@ -154,17 +154,44 @@ export const aiCommand: Command = {
           }
         );
 
-        const replyContent = response.data.choices[0].message.content;
+        const replyContent = response.data.choices[0].message.content.trim().replace(/\n{3,}/g, '\n\n');
         
         const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
         
         let lastMessage;
-        for (const chunk of chunks) {
-          if (!lastMessage) {
-             lastMessage = await interaction.editReply(chunk);
-          } else {
-             lastMessage = await interaction.followUp(chunk);
-          }
+        
+        // Send first chunk with embeds
+        if (chunks.length > 0) {
+           // User Prompt Embed
+           const userEmbed = new EmbedBuilder()
+             .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+             .setDescription(prompt)
+             .setColor(0x0099FF);
+
+           if (image) {
+             userEmbed.setImage(image.url);
+           }
+
+           // Bot Response Embed
+           const botEmbed = new EmbedBuilder()
+             .setAuthor({ name: interaction.client.user.username, iconURL: interaction.client.user.displayAvatarURL() })
+             .setDescription(`**${chunks[0]}**`)
+             .setColor(0xec09a4); // Different color for bot
+
+           lastMessage = await interaction.editReply({ embeds: [userEmbed, botEmbed] });
+        } else {
+           // Should not happen usually, but if empty response
+           const userEmbed = new EmbedBuilder()
+             .setAuthor({ name: interaction.user.username, iconURL: interaction.user.displayAvatarURL() })
+             .setDescription(prompt)
+             .setColor(0x0099FF);
+           
+           lastMessage = await interaction.editReply({ embeds: [userEmbed] });
+        }
+
+        // Send remaining chunks as normal text (or embeds if preferred, but text is standard for long replies)
+        for (let i = 1; i < chunks.length; i++) {
+           lastMessage = await interaction.followUp(`**${chunks[i]}**`);
         }
 
         if (lastMessage) {
