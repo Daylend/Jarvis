@@ -4,6 +4,7 @@ import { commands } from './commands';
 import { prisma } from './db';
 import { angryResponses } from './angry-responses';
 import { getContext, setContext } from './ai-context';
+import { getChannelUnlock } from './channel-lock';
 import axios from 'axios';
 
 const client = new Client({
@@ -59,8 +60,11 @@ client.on(Events.MessageCreate, async message => {
     if (referencedMessage.author.id === client.user?.id) {
       const context = getContext(referencedMessage.id);
       if (context) {
-        if (message.author.id !== config.ownerId) {
-          return; // Ignore replies from non-owners for AI context
+        // Check if channel is unlocked or user is owner
+        const unlock = getChannelUnlock(message.channelId);
+        if (message.author.id !== config.ownerId && !unlock) {
+          // If not owner and not unlocked, do nothing (and return to avoid falling through)
+          return; 
         }
 
         // Continue conversation
@@ -118,6 +122,61 @@ client.on(Events.MessageCreate, async message => {
 
   // @Mention Logic
   if (client.user && message.mentions.has(client.user)) {
+    // Check if channel is unlocked for AI
+    const unlock = getChannelUnlock(message.channelId);
+    if (unlock) {
+      // AI Response instead of Angry/Quote
+      try {
+        await message.channel.sendTyping();
+
+        // Get provider model
+        const provider = await prisma.aIProvider.findUnique({
+          where: { name: unlock.providerName },
+        });
+
+        if (!provider) {
+           // Fallback if provider deleted?
+           return; 
+        }
+
+        const messages: any[] = [{ role: 'user', content: message.content }];
+
+        const response = await axios.post(
+            `${config.openWebUiUrl}/chat/completions`,
+            {
+              model: provider.model,
+              messages: messages,
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${config.openWebUiKey}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          const replyContent = response.data.choices[0].message.content;
+          
+          const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
+          let lastMessage;
+          for (const chunk of chunks) {
+             lastMessage = await message.reply(chunk);
+          }
+
+          if (lastMessage) {
+            messages.push({ role: 'assistant', content: replyContent });
+            setContext(lastMessage.id, {
+              providerModel: provider.model,
+              history: messages,
+            });
+          }
+          return; // Don't do angry logic
+
+      } catch (error) {
+        console.error("AI Unlock Error", error);
+      }
+    }
+
     const rng = Math.random() * 100;
     
     if (rng < 70) {
