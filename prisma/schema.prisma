@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Quote {
+  id        Int      @id @default(autoincrement())
+  text      String
+  type      String   @default("funny") // "funny" or "angry"
+  addedBy   String?
+  createdAt DateTime @default(now())
+}
+
+model AIProvider {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  model     String
+  addedBy   String?
+  createdAt DateTime @default(now())
+}

@@ -1,0 +1,34 @@
+services:
+  paxfax:
+    image: registry.example.com/paxfax:latest
+    container_name: paxfax
+    restart: unless-stopped
+    env_file:
+      - stack.env
+    volumes:
+      - /mnt/user/appdata/paxfax/data:/app/data
+      - /mnt/user/appdata/paxfax/logs:/app/logs
+    environment:
+      - PUID=99
+      - PGID=100
+      - DATABASE_URL=file:/app/data/database.sqlite
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_DIR=/app/logs
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+      - OWNER_USER_ID=${OWNER_USER_ID}
+      - OPENWEBUI_API_URL=${OPENWEBUI_API_URL}
+      - OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - deploy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  deploy:
+    external: true

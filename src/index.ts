@@ -1,0 +1,162 @@
+import { Client, GatewayIntentBits, Events, Collection, Message } from 'discord.js';
+import { config } from './config';
+import { commands } from './commands';
+import { prisma } from './db';
+import { angryResponses } from './angry-responses';
+import { getContext, setContext } from './ai-context';
+import axios from 'axios';
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+});
+
+const commandMap = new Collection<string, any>();
+for (const command of commands) {
+  commandMap.set(command.data.name, command);
+}
+
+client.once(Events.ClientReady, c => {
+  console.log(`Ready! Logged in as ${c.user.tag}`);
+});
+
+client.on(Events.InteractionCreate, async interaction => {
+  if (interaction.isChatInputCommand()) {
+    const command = commandMap.get(interaction.commandName);
+    if (!command) return;
+
+    try {
+      await command.execute(interaction);
+    } catch (error) {
+      console.error(error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: 'There was an error executing this command!', ephemeral: true });
+      } else {
+        await interaction.reply({ content: 'There was an error executing this command!', ephemeral: true });
+      }
+    }
+  } else if (interaction.isAutocomplete()) {
+    const command = commandMap.get(interaction.commandName);
+    if (!command || !command.autocomplete) return;
+
+    try {
+      await command.autocomplete(interaction);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+});
+
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot) return;
+
+  // AI Reply Logic
+  if (message.reference && message.reference.messageId) {
+    const referencedMessage = await message.channel.messages.fetch(message.reference.messageId);
+    if (referencedMessage.author.id === client.user?.id) {
+      const context = getContext(referencedMessage.id);
+      if (context) {
+        if (message.author.id !== config.ownerId) {
+          return; // Ignore replies from non-owners for AI context
+        }
+
+        // Continue conversation
+        const userContent: any[] = [{ type: 'text', text: message.content }];
+        // Handle attachments in reply if any (optional, but good to have)
+        if (message.attachments.size > 0) {
+             message.attachments.forEach(att => {
+                 userContent.push({ type: 'image_url', image_url: { url: att.url } });
+             });
+        }
+
+        context.history.push({ role: 'user', content: userContent as any });
+
+        try {
+          // Show typing
+          await message.channel.sendTyping();
+
+          const response = await axios.post(
+            `${config.openWebUiUrl}/chat/completions`,
+            {
+              model: context.providerModel,
+              messages: context.history,
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${config.openWebUiKey}`,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          const replyContent = response.data.choices[0].message.content;
+          
+          // Split and send
+          const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
+          let lastMessage;
+          for (const chunk of chunks) {
+             lastMessage = await message.reply(chunk);
+          }
+
+          if (lastMessage) {
+            context.history.push({ role: 'assistant', content: replyContent });
+            setContext(lastMessage.id, context);
+          }
+
+        } catch (error) {
+          console.error('AI Reply Error:', error);
+          await message.reply('Error continuing conversation.');
+        }
+      }
+      // Return here to prevent falling through to @mention logic if it was a reply to the bot
+      return;
+    }
+  }
+
+  // @Mention Logic
+  if (client.user && message.mentions.has(client.user)) {
+    const rng = Math.random() * 100;
+    
+    if (rng < 70) {
+      // Angry response
+      const count = await prisma.quote.count({ where: { type: 'angry' } });
+      if (count > 0) {
+        const skip = Math.floor(Math.random() * count);
+        const quote = await prisma.quote.findFirst({
+          where: { type: 'angry' },
+          skip: skip,
+        });
+        if (quote) {
+          await message.reply(quote.text);
+        } else {
+           await message.reply(angryResponses[Math.floor(Math.random() * angryResponses.length)]);
+        }
+      } else {
+        // Fallback to hardcoded if no DB quotes
+        await message.reply(angryResponses[Math.floor(Math.random() * angryResponses.length)]);
+      }
+    } else {
+      // Quote response (Funny)
+      const count = await prisma.quote.count({ where: { type: 'funny' } });
+      if (count > 0) {
+        const skip = Math.floor(Math.random() * count);
+        const quote = await prisma.quote.findFirst({
+          where: { type: 'funny' },
+          skip: skip,
+        });
+        if (quote) {
+          await message.reply(quote.text);
+        } else {
+            await message.reply("I have nothing funny to say.");
+        }
+      } else {
+        await message.reply("I have nothing funny to say.");
+      }
+    }
+  }
+});
+
+client.login(config.discordToken);

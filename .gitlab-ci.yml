@@ -1,0 +1,37 @@
+# Build the container using dind then push to local container registry
+# Requires env vars REGISTRY_USERNAME and REGISTRY_PASSWORD.
+stages:
+  - build
+
+variables:
+  DOCKER_REGISTRY: registry.example.com
+  DOCKER_IMAGE_NAME: paxfax
+  DOCKER_IMAGE_TAG: $CI_COMMIT_SHA
+  DOCKER_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
+  LATEST_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:latest
+  # Add Docker configuration variables
+  DOCKER_TLS_CERTDIR: ""  # Disable TLS
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+
+build-docker:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - name: docker:20.10.16-dind
+      command: ["--tls=false"]
+      alias: docker
+  before_script:
+    - if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then echo "Logging in to Docker registry $DOCKER_REGISTRY"; docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $DOCKER_REGISTRY; fi
+  script:
+    - echo "Building Docker image from Dockerfile..."
+    - docker build -t $DOCKER_IMAGE -t $LATEST_IMAGE -f docker/Dockerfile .
+    - echo "Pushing Docker image to registry $DOCKER_REGISTRY"
+    - docker push $DOCKER_IMAGE
+    - docker push $LATEST_IMAGE
+    - echo "Successfully built and pushed image $DOCKER_IMAGE"
+    - echo "Also tagged and pushed as $LATEST_IMAGE"
+  only:
+    - main
+  tags:
+    - docker
