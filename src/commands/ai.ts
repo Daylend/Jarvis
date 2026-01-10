@@ -5,6 +5,7 @@ import { config } from '../config';
 import { Command } from '../types';
 import { setContext } from '../ai-context';
 import { unlockChannel, lockChannel, getChannelUnlock } from '../channel-lock';
+import { resolveMentions } from '../utils';
 
 export const aiCommand: Command = {
   data: new SlashCommandBuilder()
@@ -126,7 +127,10 @@ export const aiCommand: Command = {
       }
 
       const messages: any[] = [];
-      const userContent: any[] = [{ type: 'text', text: prompt }];
+      const displayName = (interaction.member as any)?.displayName || interaction.user.displayName;
+      const resolvedPrompt = await resolveMentions(prompt, interaction.client, interaction.guild);
+      const userPrompt = `${displayName} (${interaction.user.username}): ${resolvedPrompt}`;
+      const userContent: any[] = [{ type: 'text', text: userPrompt }];
 
       if (image) {
         userContent.push({

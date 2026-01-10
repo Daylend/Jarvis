@@ -5,6 +5,7 @@ import { prisma } from './db';
 import { angryResponses } from './angry-responses';
 import { getContext, setContext } from './ai-context';
 import { getChannelUnlock } from './channel-lock';
+import { resolveMentions } from './utils';
 import axios from 'axios';
 
 const client = new Client({
@@ -68,7 +69,10 @@ client.on(Events.MessageCreate, async message => {
         }
 
         // Continue conversation
-        const userContent: any[] = [{ type: 'text', text: message.content }];
+        const displayName = message.member?.displayName || message.author.displayName;
+        const resolvedContent = await resolveMentions(message.content, message.client, message.guild);
+        const userPrompt = `${displayName} (${message.author.username}): ${resolvedContent}`;
+        const userContent: any[] = [{ type: 'text', text: userPrompt }];
         // Handle attachments in reply if any (optional, but good to have)
         if (message.attachments.size > 0) {
              message.attachments.forEach(att => {
@@ -96,7 +100,7 @@ client.on(Events.MessageCreate, async message => {
             }
           );
 
-          const replyContent = response.data.choices[0].message.content;
+          const replyContent = response.data.choices[0].message.content.trim().replace(/\n{3,}/g, '\n\n');
           
           // Split and send
           const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
@@ -139,7 +143,10 @@ client.on(Events.MessageCreate, async message => {
            return; 
         }
 
-        const messages: any[] = [{ role: 'user', content: message.content }];
+        const displayName = message.member?.displayName || message.author.displayName;
+        const resolvedContent = await resolveMentions(message.content, message.client, message.guild);
+        const userPrompt = `${displayName} (${message.author.username}): ${resolvedContent}`;
+        const messages: any[] = [{ role: 'user', content: userPrompt }];
 
         const response = await axios.post(
             `${config.openWebUiUrl}/chat/completions`,
@@ -155,7 +162,7 @@ client.on(Events.MessageCreate, async message => {
             }
           );
 
-          const replyContent = response.data.choices[0].message.content;
+          const replyContent = response.data.choices[0].message.content.trim().replace(/\n{3,}/g, '\n\n');
           
           const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
           let lastMessage;
