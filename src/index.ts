@@ -61,6 +61,13 @@ client.on(Events.MessageCreate, async message => {
     if (referencedMessage.author.id === client.user?.id) {
       const context = getContext(referencedMessage.id);
       if (context) {
+        // Check reply limit
+        const replyCount = context.history.filter((m: any) => m.role === 'assistant').length;
+        if (replyCount >= 10) {
+           await message.reply("Conversation limit reached. Please start a new conversation.");
+           return;
+        }
+
         // Check if channel is unlocked or user is owner
         const unlock = getChannelUnlock(message.channelId);
         if (message.author.id !== config.ownerId && !unlock) {
