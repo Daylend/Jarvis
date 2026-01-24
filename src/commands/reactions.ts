@@ -24,12 +24,18 @@ export const reactionsCommand: Command = {
             .setDescription('The channel where the messages are (defaults to current)')
             .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         )
+        .addBooleanOption(option =>
+          option.setName('hide')
+            .setDescription('Hide the response (ephemeral)')
+            .setRequired(false)
+        )
     ),
   execute: async (interaction: ChatInputCommandInteraction) => {
     const subcommand = interaction.options.getSubcommand();
 
     if (subcommand === 'missing') {
-      await interaction.deferReply({ ephemeral: true });
+      const hide = interaction.options.getBoolean('hide') ?? false;
+      await interaction.deferReply({ ephemeral: hide });
 
       const rolesString = interaction.options.getString('roles', true);
       const messageIdsString = interaction.options.getString('message_ids', true);
@@ -78,7 +84,7 @@ export const reactionsCommand: Command = {
             }
           } catch (e) {
             console.error(`Failed to fetch message ${msgId}:`, e);
-            await interaction.followUp({ content: `Warning: Could not fetch message ${msgId}. It might be deleted or I don't have access.`, ephemeral: true });
+            await interaction.followUp({ content: `Warning: Could not fetch message ${msgId}. It might be deleted or I don't have access.`, ephemeral: hide });
           }
         }
         
@@ -110,12 +116,12 @@ export const reactionsCommand: Command = {
           return;
         }
 
-        const memberList = missingMembers.map((m: any) => m.toString()).join('\n');
+        const memberList = missingMembers.map((m: any) => `${m.user.username} ${m.toString()}`).join('\n');
         
         if (memberList.length > 4000) {
              const chunks: string[] = [];
              let currentChunk = '';
-             const lines = missingMembers.map((m: any) => m.toString());
+             const lines = missingMembers.map((m: any) => `${m.user.username} ${m.toString()}`);
              
              for (const line of lines) {
                  if (currentChunk.length + line.length + 1 > 2000) { // Discord limit is 2000 per message usually, embed desc is 4096
@@ -130,7 +136,7 @@ export const reactionsCommand: Command = {
              
              for (const chunk of chunks) {
                  // Send as separate messages if too long for one embed
-                 await interaction.followUp({ content: chunk, ephemeral: true });
+                 await interaction.followUp({ content: chunk, ephemeral: hide });
              }
         } else {
             const embed = new EmbedBuilder()
