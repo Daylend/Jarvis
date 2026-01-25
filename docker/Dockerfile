@@ -48,7 +48,7 @@ COPY --from=builder /app/tts-service ./tts-service
 RUN git clone https://github.com/ysharma3501/LuxTTS.git tts-service/LuxTTS
 
 # Install Python requirements
-RUN pip3 install --no-cache-dir -r tts-service/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r tts-service/requirements.txt
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /app/entrypoint.sh
