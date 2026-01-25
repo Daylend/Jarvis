@@ -36,7 +36,7 @@ export const ttsCommand = {
         return;
     }
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     try {
         const response = await axios.post(TTS_API_URL, {

@@ -84,14 +84,14 @@ export const voiceCommand = {
 
     if (subcommand === 'list') {
         if (!fs.existsSync(VOICES_DIR)) {
-            await interaction.reply('No voices directory found.');
+            await interaction.reply({ content: 'No voices directory found.', ephemeral: true });
             return;
         }
         const files = fs.readdirSync(VOICES_DIR).filter(f => f.endsWith('.wav') || f.endsWith('.mp3') || f.endsWith('.ogg') || f.endsWith('.flac'));
         if (files.length === 0) {
-            await interaction.reply('No voice models available.');
+            await interaction.reply({ content: 'No voice models available.', ephemeral: true });
         } else {
-            await interaction.reply(`Available voice models:\n${files.join('\n')}`);
+            await interaction.reply({ content: `Available voice models:\n${files.join('\n')}`, ephemeral: true });
         }
     } else if (subcommand === 'set') {
         const name = interaction.options.getString('name', true);
@@ -112,7 +112,7 @@ export const voiceCommand = {
             update: { voice: name },
             create: { userId: interaction.user.id, voice: name },
         });
-        await interaction.reply(`Your voice preference has been set to: ${name}`);
+        await interaction.reply({ content: `Your voice preference has been set to: ${name}`, ephemeral: true });
 
     } else if (subcommand === 'add') {
         const attachment = interaction.options.getAttachment('file', true);
@@ -143,7 +143,7 @@ export const voiceCommand = {
             response.pipe(file);
             file.on('finish', async () => {
                 file.close();
-                await interaction.reply(`Voice model "${filename}" added successfully.`);
+                await interaction.reply({ content: `Voice model "${filename}" added successfully.`, ephemeral: true });
             });
         }).on('error', async (err) => {
             fs.unlink(filePath, () => {}); 
@@ -162,7 +162,7 @@ export const voiceCommand = {
         
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
-            await interaction.reply(`Voice model "${name}" removed.`);
+            await interaction.reply({ content: `Voice model "${name}" removed.`, ephemeral: true });
         } else {
             await interaction.reply({ content: `Voice model "${name}" not found.`, ephemeral: true });
         }

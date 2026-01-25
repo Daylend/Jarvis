@@ -48,6 +48,10 @@ COPY --from=builder /app/tts-service ./tts-service
 RUN git clone https://github.com/ysharma3501/LuxTTS.git tts-service/LuxTTS
 
 # Install Python requirements
+# Install ROCm PyTorch
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+RUN pip3 install --no-cache-dir --pre --break-system-packages torch torchvision torchaudio torchcodec --index-url https://download.pytorch.org/whl/nightly/rocm6.4
+
 RUN pip3 install --no-cache-dir --break-system-packages -r tts-service/requirements.txt
 
 # Copy entrypoint script
