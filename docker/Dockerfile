@@ -1,9 +1,9 @@
-FROM node:18-alpine AS builder
+FROM node:18-slim AS builder
 
 WORKDIR /app
 
 # Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 # Copy package files first for better layer caching
 COPY package*.json ./
@@ -22,11 +22,19 @@ COPY . .
 # Build the application
 RUN npm run build
 
-FROM node:18-alpine
+FROM node:18-slim
 
-# Install OpenSSL, shadow (for usermod), su-exec, and fix for Prisma engine on Alpine Linux
-RUN apk add --no-cache openssl shadow su-exec && \
-    ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3
+# Install dependencies including Python and TTS requirements
+RUN apt-get update && apt-get install -y \
+    openssl \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    libsndfile1 \
+    git \
+    gosu \
+    passwd \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -34,6 +42,13 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/tts-service ./tts-service
+
+# Clone LuxTTS repository
+RUN git clone https://github.com/ysharma3501/LuxTTS.git tts-service/LuxTTS
+
+# Install Python requirements
+RUN pip3 install --no-cache-dir -r tts-service/requirements.txt
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /app/entrypoint.sh

@@ -13,6 +13,9 @@ services:
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=info
       - LOG_DIR=/app/logs
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
     logging:
       driver: "json-file"
       options:

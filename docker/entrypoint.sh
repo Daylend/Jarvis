@@ -11,6 +11,7 @@ fi
 # Fix owner of application directory and data directories
 chown -R node:node /app/dist
 chown -R node:node /app/node_modules
+chown -R node:node /app/tts-service
 
 # Ensure data directory can be written to
 if [ ! -w "/app/data" ]; then
@@ -36,11 +37,22 @@ else
   chmod 777 /app/data
 fi
 
+# Ensure voices directory exists
+if [ ! -d "/app/data/voices" ]; then
+  echo "Creating voices directory"
+  mkdir -p /app/data/voices
+  chmod 777 /app/data/voices
+fi
+
 # Display logs directory
 echo "Logs will be written to $(ls -la /app/logs)"
 
+# Start TTS Service in background
+echo "Starting TTS Service..."
+gosu node python3 /app/tts-service/server.py > /app/logs/tts.log 2>&1 &
+
 # Run as node user
 echo "Running database setup and starting application as $(id)"
-su-exec node npx prisma migrate deploy
-su-exec node node dist/deploy-commands.js
-exec su-exec node node dist/index.js
+gosu node npx prisma migrate deploy
+gosu node node dist/deploy-commands.js
+exec gosu node node dist/index.js
