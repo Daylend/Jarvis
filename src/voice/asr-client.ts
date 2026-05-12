@@ -206,7 +206,7 @@ class AsrClient {
 
     const userId = state.streamUsers.get(msg.streamId);
     if (!userId) {
-      console.warn(`[asr-client] Final for unknown streamId ${msg.streamId}`);
+      console.warn(`[asr-client] Final for unknown streamId ${msg.streamId} — streamUsers keys: [${[...state.streamUsers.keys()].join(',')}]`);
       return;
     }
 
@@ -219,7 +219,7 @@ class AsrClient {
     console.log(`[transcript] User ${userId}: ${textNormalized}${replacements}`);
     console.log(`[asr] [${userId}] raw="${msg.text}"${replacements}`);
 
-    await transcriptStore.save({
+    const row = {
       sessionId: state.ctx.id,
       guildId: state.ctx.guildId,
       channelId: state.ctx.channelId,
@@ -229,7 +229,14 @@ class AsrClient {
       textRaw: msg.text,
       textNormalized,
       confidence: msg.confidence ?? null,
-    });
+    };
+    console.log(`[asr-client] saving transcript row: sessionId=${row.sessionId} userId=${row.userId} text="${row.textNormalized}"`);
+    try {
+      await transcriptStore.save(row);
+      console.log(`[asr-client] transcript saved OK`);
+    } catch (err) {
+      console.error(`[asr-client] transcriptStore.save FAILED:`, err);
+    }
 
     await actionRouter.onFinal(state.ctx, {
       ...msg,

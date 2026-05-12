@@ -48,6 +48,8 @@ services:
       - VAD_THRESHOLD=${VAD_THRESHOLD:-0.5}
       - END_SILENCE_MS=${END_SILENCE_MS:-700}
       - MAX_UTTERANCE_MS=${MAX_UTTERANCE_MS:-25000}
+      # Force ggml-vulkan to select GPU 0 (required for AMD/ROCm Vulkan)
+      - GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES:-0}
     volumes:
       - /mnt/user/appdata/paxfax/asr-models:/app/models
     # AMD GPU / Vulkan + ROCm access (mirrors working llama-cpp-rocm config)
@@ -56,6 +58,7 @@ services:
       - /dev/dri
     group_add:
       - video
+      - render
     cap_add:
       - SYS_PTRACE
     security_opt:

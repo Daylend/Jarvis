@@ -39,15 +39,22 @@ services:
       - VAD_THRESHOLD=0.5
       - END_SILENCE_MS=700
       - MAX_UTTERANCE_MS=25000
+      # Force whisper.cpp / ggml-vulkan to use GPU 0.
+      # Without this, ggml-vulkan may enumerate devices but not select one.
+      - GGML_VK_VISIBLE_DEVICES=0
     volumes:
       - ../data/asr-models:/app/models
     ports:
       - "8765:8765"
     # AMD GPU / Vulkan access via /dev/dri
+    # Requires both the 'video' group (display) and 'render' group (compute/Vulkan).
+    # On most Linux hosts the render group GID is 109 — adjust if `getent group render`
+    # shows a different value on your host.
     devices:
       - /dev/dri:/dev/dri
     group_add:
       - video
+      - render
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s

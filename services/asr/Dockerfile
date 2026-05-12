@@ -59,6 +59,13 @@ RUN echo "=== libwhisper / libggml shared libs ===" && \
     | grep -v '^/proc' || echo "(not found)"
 RUN echo "=== site-packages dirs ===" && \
     python3 -c "import site; print('\n'.join(site.getsitepackages()))" 2>&1 || true
+# Confirm Vulkan was compiled into the ggml backend.
+# ggml-vulkan.so or a VULKAN symbol in libggml*.so confirms GGML_VULKAN=ON worked.
+RUN echo "=== Vulkan symbols in ggml libs ===" && \
+    find / \( -name 'libggml*.so*' -o -name '_pywhispercpp*.so' \) 2>/dev/null \
+    | grep -v '^/proc' \
+    | xargs -I{} sh -c 'echo "--- {} ---"; nm -D {} 2>/dev/null | grep -i vulkan | head -5 || strings {} 2>/dev/null | grep -i "ggml_vk\|vulkan" | head -5' \
+    || echo "(nm/strings not available)"
 
 # Ensure libwhisper.so / libggml*.so are in /usr/local/lib so the runtime
 # stage's "COPY /usr/local /usr/local" picks them up.

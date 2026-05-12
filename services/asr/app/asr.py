@@ -48,7 +48,10 @@ def _load_model():
             except Exception as ve:
                 logger.warning(f"[vulkan] Could not run vulkaninfo: {ve}")
 
-        logger.info(f"Loading whisper model from {MODEL_PATH} (device={DEVICE})")
+        # Log the GGML_VK_VISIBLE_DEVICES env var so we can confirm it's set
+        import os
+        vk_dev = os.environ.get("GGML_VK_VISIBLE_DEVICES", "(not set)")
+        logger.info(f"Loading whisper model from {MODEL_PATH} (device={DEVICE}, GGML_VK_VISIBLE_DEVICES={vk_dev})")
         _model = Model(
             MODEL_PATH,
             n_threads=4,
@@ -94,6 +97,11 @@ def get_engine_info() -> dict:
     }
 
 
+# whisper.cpp requires at least 1 second (16000 samples) of audio to produce
+# reliable output. Shorter clips are padded with silence to reach this minimum.
+_MIN_SAMPLES = SAMPLE_RATE  # 1 second
+
+
 def _transcribe_sync(pcm_float32: np.ndarray) -> list[dict]:
     """
     Synchronous transcription. Returns list of segment dicts:
@@ -102,6 +110,12 @@ def _transcribe_sync(pcm_float32: np.ndarray) -> list[dict]:
     if _model is None:
         return []
     try:
+        # Pad to minimum length so whisper.cpp doesn't return empty segments
+        # for short utterances (e.g. "Hello" at ~500ms).
+        if len(pcm_float32) < _MIN_SAMPLES:
+            pad = np.zeros(_MIN_SAMPLES - len(pcm_float32), dtype=np.float32)
+            pcm_float32 = np.concatenate([pcm_float32, pad])
+
         segments = _model.transcribe(pcm_float32, language="en")
         return [
             {

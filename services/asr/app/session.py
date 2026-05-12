@@ -117,7 +117,10 @@ class Session:
         try:
             await self._ws.send_text(json.dumps(payload))
         except Exception as e:
-            logger.debug(f"[session {self._session_id}] send_json failed: {e}")
+            # Log at WARNING so we can see when transcription results are lost
+            # because the WebSocket closed before inference finished (e.g. 20s CPU inference
+            # outlasting a 15s keepalive ping timeout).
+            logger.warning(f"[session {self._session_id}] send_json failed (WS closed?): {e} — payload type={payload.get('type')!r}")
 
     async def _cleanup(self) -> None:
         """Close all open streams on disconnect."""
