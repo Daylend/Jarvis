@@ -30,7 +30,7 @@ RUN npm run build
 FROM node:18-alpine
 
 # Install runtime deps: OpenSSL (Prisma), ffmpeg + opus (prism-media), shadow + su-exec (entrypoint)
-RUN apk add --no-cache openssl shadow su-exec ffmpeg libopus && \
+RUN apk add --no-cache openssl shadow su-exec ffmpeg opus && \
     ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3
 
 WORKDIR /app
