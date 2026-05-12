@@ -53,10 +53,14 @@ class AudioStream:
         if not pcm:
             return
 
+        import numpy as np
         chunk_samples = len(pcm) // 2
         chunk_ms = len(pcm) // BYTES_PER_MS
+        audio = np.frombuffer(pcm, dtype=np.int16)
+        rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
+        peak = int(np.max(np.abs(audio)))
         speech_detected = is_speech(pcm)
-        logger.info(f"[stream {self.stream_id}] push_pcm {len(pcm)}B/{chunk_ms}ms VAD={speech_detected} in_speech={self._in_speech}")
+        logger.info(f"[stream {self.stream_id}] push_pcm {len(pcm)}B/{chunk_ms}ms VAD={speech_detected} rms={rms:.1f} peak={peak} in_speech={self._in_speech}")
 
         if speech_detected:
             if not self._in_speech:
