@@ -50,11 +50,17 @@ services:
       - MAX_UTTERANCE_MS=${MAX_UTTERANCE_MS:-25000}
     volumes:
       - /mnt/user/appdata/paxfax/asr-models:/app/models
-    # AMD GPU / Vulkan access via /dev/dri
+    # AMD GPU / Vulkan + ROCm access (mirrors working llama-cpp-rocm config)
     devices:
-      - /dev/dri:/dev/dri
+      - /dev/kfd
+      - /dev/dri
     group_add:
       - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    ipc: host
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s

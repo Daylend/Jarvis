@@ -28,16 +28,19 @@ def _load_model():
     try:
         from pywhispercpp.model import Model
 
-        # pywhispercpp exposes gpu_device param; Vulkan is selected by device index
-        # For Vulkan on AMD, device=0 typically selects the first Vulkan-capable GPU.
+        # GPU backend (Vulkan/CUDA) is selected purely at build time via CMake flags
+        # (-DWHISPER_VULKAN=ON). pywhispercpp.Model only accepts whisper_full_params
+        # fields as kwargs; gpu_device and n_gpu_layers are NOT valid fields and will
+        # raise AttributeError. No runtime GPU param is needed or supported.
         use_gpu = DEVICE.lower() in ("vulkan", "cuda", "gpu")
-        gpu_device = 0 if use_gpu else -1
 
-        logger.info(f"Loading whisper model from {MODEL_PATH} (device={DEVICE}, gpu_device={gpu_device})")
+        logger.info(f"Loading whisper model from {MODEL_PATH} (device={DEVICE})")
         _model = Model(
             MODEL_PATH,
             n_threads=4,
-            gpu_device=gpu_device,
+            print_progress=False,
+            print_realtime=False,
+            print_timestamps=False,
         )
         _model_loaded = True
         _vulkan_active = use_gpu
