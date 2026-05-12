@@ -17,8 +17,9 @@ RUN apk add --no-cache \
 
 # Copy package files first for better layer caching
 COPY package*.json ./
-# Use npm ci if package-lock.json exists, otherwise use npm install
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Use npm install so the lock file is always regenerated when package.json changes.
+# (npm ci would fail if package-lock.json is out of sync with package.json)
+RUN npm install
 
 # Copy Prisma schema and migrations
 COPY prisma ./prisma/
