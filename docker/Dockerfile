@@ -1,4 +1,4 @@
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ COPY . .
 # Build the application
 RUN npm run build
 
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Install runtime deps: OpenSSL (Prisma), ffmpeg + opus (prism-media), shadow + su-exec (entrypoint)
 RUN apk add --no-cache openssl shadow su-exec ffmpeg opus && \
