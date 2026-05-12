@@ -79,7 +79,7 @@ class AudioStream:
         self._vad_buf = bytearray()
 
         speech_detected = is_speech(vad_chunk)
-        logger.debug(f"[stream {self.stream_id}] VAD on {len(vad_chunk)}B: {speech_detected}")
+        logger.info(f"[stream {self.stream_id}] VAD on {len(vad_chunk)}B: {speech_detected}")
 
         if speech_detected:
             if not self._in_speech:
