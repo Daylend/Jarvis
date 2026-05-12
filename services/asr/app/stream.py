@@ -40,6 +40,11 @@ class AudioStream:
         self._speech_start_sample = 0        # sample index when utterance started
         self._total_samples = 0              # total samples received since stream open
 
+        # VAD pre-buffer: accumulate chunks until we have enough for Silero VAD.
+        # Silero VAD requires >= 512 samples at 16kHz; we use 512 samples = 1024 bytes.
+        self._vad_buf = bytearray()
+        self._VAD_MIN_BYTES = 1024  # 512 samples * 2 bytes/sample
+
         # State
         self._in_speech = False
         self._last_speech_time = 0.0         # monotonic time of last speech chunk
@@ -53,25 +58,39 @@ class AudioStream:
         if not pcm:
             return
 
-        import numpy as np
         chunk_samples = len(pcm) // 2
-        chunk_ms = len(pcm) // BYTES_PER_MS
-        audio = np.frombuffer(pcm, dtype=np.int16)
-        rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2)))
-        peak = int(np.max(np.abs(audio)))
-        speech_detected = is_speech(pcm)
-        logger.info(f"[stream {self.stream_id}] push_pcm {len(pcm)}B/{chunk_ms}ms VAD={speech_detected} rms={rms:.1f} peak={peak} in_speech={self._in_speech}")
+        self._total_samples += chunk_samples
+
+        # Accumulate into VAD pre-buffer until we have enough samples for Silero VAD.
+        # Silero VAD requires >= 512 samples (1024 bytes) at 16kHz to work correctly.
+        # Calling it on smaller chunks (e.g. 320 samples / 20ms) always returns False.
+        self._vad_buf.extend(pcm)
+        if len(self._vad_buf) < self._VAD_MIN_BYTES:
+            # Not enough data yet — if in speech, still accumulate to speech_buf
+            if self._in_speech:
+                self._speech_buf.extend(pcm)
+                self._last_speech_time = time.monotonic()
+                self._cancel_silence_task()
+                self._silence_task = asyncio.create_task(self._silence_timeout())
+            return
+
+        # We have enough data — run VAD on the accumulated buffer
+        vad_chunk = bytes(self._vad_buf)
+        self._vad_buf = bytearray()
+
+        speech_detected = is_speech(vad_chunk)
+        logger.debug(f"[stream {self.stream_id}] VAD on {len(vad_chunk)}B: {speech_detected}")
 
         if speech_detected:
             if not self._in_speech:
                 # Start of a new utterance
                 self._in_speech = True
-                self._speech_start_sample = self._total_samples
+                self._speech_start_sample = self._total_samples - (len(vad_chunk) // 2)
                 self._speech_buf = bytearray()
                 self._last_partial_time = time.monotonic()
                 logger.info(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
 
-            self._speech_buf.extend(pcm)
+            self._speech_buf.extend(vad_chunk)
             self._last_speech_time = time.monotonic()
 
             # Cancel any pending silence timer and restart it
@@ -90,8 +109,12 @@ class AudioStream:
                 logger.debug(f"[stream {self.stream_id}] Max utterance length reached, forcing final.")
                 self._cancel_silence_task()
                 asyncio.create_task(self._emit_final())
-
-        self._total_samples += chunk_samples
+        else:
+            # No speech in this VAD window — if we were in speech, the silence
+            # timeout task will handle the transition
+            if self._in_speech:
+                self._speech_buf.extend(vad_chunk)
+                self._last_speech_time = time.monotonic()
 
     async def _silence_timeout(self) -> None:
         """Wait for END_SILENCE_MS then emit final."""
@@ -145,6 +168,20 @@ class AudioStream:
     async def close(self) -> None:
         """Flush any remaining speech buffer as a final, then clean up."""
         self._cancel_silence_task()
+
+        # Flush any leftover VAD pre-buffer as a final VAD check
+        if self._vad_buf:
+            vad_chunk = bytes(self._vad_buf)
+            self._vad_buf = bytearray()
+            if is_speech(vad_chunk):
+                if not self._in_speech:
+                    self._in_speech = True
+                    self._speech_start_sample = self._total_samples - (len(vad_chunk) // 2)
+                    self._speech_buf = bytearray()
+                self._speech_buf.extend(vad_chunk)
+            elif self._in_speech:
+                self._speech_buf.extend(vad_chunk)
+
         logger.info(f"[stream {self.stream_id}] close() in_speech={self._in_speech} buf={len(self._speech_buf)}B")
         if self._in_speech and self._speech_buf:
             await self._emit_final()
