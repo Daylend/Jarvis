@@ -3,7 +3,8 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # Install build deps: OpenSSL for Prisma, ffmpeg + opus for prism-media audio pipeline.
-# No native build tools needed: opusscript is pure JS (WASM), replacing @discordjs/opus.
+# No native build tools needed: opusscript (replaces @discordjs/opus) and
+# libsodium-wrappers (replaces sodium-native) are both pure JS — no C toolchain required.
 RUN apk add --no-cache \
     openssl \
     ffmpeg \
