@@ -109,6 +109,7 @@ class Session:
         if stream is None:
             # Stream not yet opened or already closed — silently drop
             return
+        logger.info(f"[session {self._session_id}] binary frame: stream={stream_id} pcm={len(pcm)}B")
         # push_pcm is synchronous (VAD is fast); schedule any async tasks it creates
         stream.push_pcm(pcm)
 

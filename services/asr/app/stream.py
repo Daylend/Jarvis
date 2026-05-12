@@ -54,7 +54,9 @@ class AudioStream:
             return
 
         chunk_samples = len(pcm) // 2
+        chunk_ms = len(pcm) // BYTES_PER_MS
         speech_detected = is_speech(pcm)
+        logger.info(f"[stream {self.stream_id}] push_pcm {len(pcm)}B/{chunk_ms}ms VAD={speech_detected} in_speech={self._in_speech}")
 
         if speech_detected:
             if not self._in_speech:
@@ -63,7 +65,7 @@ class AudioStream:
                 self._speech_start_sample = self._total_samples
                 self._speech_buf = bytearray()
                 self._last_partial_time = time.monotonic()
-                logger.debug(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
+                logger.info(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
 
             self._speech_buf.extend(pcm)
             self._last_speech_time = time.monotonic()
@@ -139,5 +141,6 @@ class AudioStream:
     async def close(self) -> None:
         """Flush any remaining speech buffer as a final, then clean up."""
         self._cancel_silence_task()
+        logger.info(f"[stream {self.stream_id}] close() in_speech={self._in_speech} buf={len(self._speech_buf)}B")
         if self._in_speech and self._speech_buf:
             await self._emit_final()
