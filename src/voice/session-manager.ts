@@ -62,10 +62,20 @@ class SessionManager {
       selfMute: true, // bot doesn't speak yet
     });
 
+    // DEBUG: log every state transition so we can see what kills the connection
+    for (const status of Object.values(VoiceConnectionStatus)) {
+      connection.on(status as VoiceConnectionStatus, () => {
+        console.log(`[session:diag] connection state → ${status}`);
+      });
+    }
+
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
     } catch (err) {
-      connection.destroy();
+      console.error(`[session:diag] entersState(Ready) failed. Final state: ${connection.state.status}`, err);
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        connection.destroy();
+      }
       await (prisma as any).voiceSession.update({
         where: { id: record.id },
         data: { endedAt: new Date() },
