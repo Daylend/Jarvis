@@ -1,6 +1,10 @@
 """
 Silero VAD wrapper using the silero-vad package (ONNX, CPU).
 Each per-user stream gets its own VAD instance to maintain independent state.
+
+IMPORTANT: Silero VAD's forward() requires EXACTLY 512 samples at 16kHz (1024 bytes).
+Passing any other size raises ValueError inside get_speech_timestamps(), which silently
+returns [] → False. The caller (stream.py) is responsible for slicing to exactly 1024 bytes.
 """
 import logging
 import numpy as np
@@ -27,9 +31,15 @@ def get_model():
 
 def is_speech(pcm_s16le: bytes) -> bool:
     """
-    Quick single-chunk speech check.
-    Returns True if Silero VAD detects speech in the given PCM chunk.
-    pcm_s16le: raw s16le bytes at SAMPLE_RATE Hz, mono.
+    Quick single-chunk speech check using the model's forward() directly.
+    Returns True if the speech probability for this 512-sample chunk exceeds VAD_THRESHOLD.
+
+    pcm_s16le: raw s16le bytes at SAMPLE_RATE Hz, mono — MUST be exactly 1024 bytes (512 samples).
+
+    NOTE: get_speech_timestamps() cannot be used for streaming because it requires seeing
+    both the start AND end of a speech segment within the buffer to emit timestamps.
+    On a single 32ms chunk it always returns [] even when raw_prob > threshold.
+    We call model.forward() directly instead, which returns the per-frame probability.
     """
     global _diag_call_count
 
@@ -40,35 +50,23 @@ def is_speech(pcm_s16le: bytes) -> bool:
     audio = audio_int16.astype(np.float32) / 32768.0
     model = get_model()
 
+    audio_tensor = torch.from_numpy(audio)
+    speech_prob = float(model(audio_tensor, SAMPLE_RATE).item())
+
+    result = speech_prob >= VAD_THRESHOLD
+
     # --- DIAGNOSTIC: log raw VAD probability score and audio stats ---
     if _diag_call_count < _DIAG_MAX_CALLS:
         _diag_call_count += 1
         peak = int(np.abs(audio_int16).max())
         rms = float(np.sqrt(np.mean(audio_int16.astype(np.float32) ** 2)))
-        n_samples = len(audio_int16)
-        # Call the model directly to get the raw probability score
-        try:
-            audio_tensor = torch.from_numpy(audio)
-            raw_prob = float(model(audio_tensor, SAMPLE_RATE).item())
-        except Exception as e:
-            raw_prob = -1.0
-            logger.warning(f"[vad diag] direct model call failed: {e}")
         logger.info(
-            f"[vad diag #{_diag_call_count}] samples={n_samples} peak={peak} rms={rms:.1f} "
-            f"raw_prob={raw_prob:.4f} threshold={VAD_THRESHOLD}"
+            f"[vad diag #{_diag_call_count}] samples={len(audio_int16)} peak={peak} rms={rms:.1f} "
+            f"speech_prob={speech_prob:.4f} threshold={VAD_THRESHOLD} result={result}"
         )
     # --- END DIAGNOSTIC ---
 
-    # get_speech_timestamps returns a list of dicts with 'start'/'end' sample indices
-    timestamps = get_speech_timestamps(
-        audio,
-        model,
-        threshold=VAD_THRESHOLD,
-        sampling_rate=SAMPLE_RATE,
-        min_speech_duration_ms=100,
-        min_silence_duration_ms=100,
-    )
-    return len(timestamps) > 0
+    return result
 
 
 def find_speech_segments(pcm_s16le: bytes) -> list[dict]:

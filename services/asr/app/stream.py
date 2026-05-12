@@ -40,10 +40,11 @@ class AudioStream:
         self._speech_start_sample = 0        # sample index when utterance started
         self._total_samples = 0              # total samples received since stream open
 
-        # VAD pre-buffer: accumulate chunks until we have enough for Silero VAD.
-        # Silero VAD requires >= 512 samples at 16kHz; we use 512 samples = 1024 bytes.
+        # VAD pre-buffer: accumulate chunks until we have exactly 512 samples for Silero VAD.
+        # Silero VAD's forward() requires EXACTLY 512 samples at 16kHz (1024 bytes).
+        # Passing any other size raises ValueError and get_speech_timestamps returns [].
         self._vad_buf = bytearray()
-        self._VAD_MIN_BYTES = 1024  # 512 samples * 2 bytes/sample
+        self._VAD_CHUNK_BYTES = 1024  # exactly 512 samples * 2 bytes/sample
 
         # State
         self._in_speech = False
@@ -61,60 +62,54 @@ class AudioStream:
         chunk_samples = len(pcm) // 2
         self._total_samples += chunk_samples
 
-        # Accumulate into VAD pre-buffer until we have enough samples for Silero VAD.
-        # Silero VAD requires >= 512 samples (1024 bytes) at 16kHz to work correctly.
-        # Calling it on smaller chunks (e.g. 320 samples / 20ms) always returns False.
+        # Accumulate into VAD pre-buffer.
+        # Silero VAD's forward() requires EXACTLY 512 samples (1024 bytes) at 16kHz.
+        # Passing any other size raises ValueError inside get_speech_timestamps(),
+        # which silently returns [] → False every time.
+        # We consume the buffer in exact 1024-byte slices, keeping any remainder.
         self._vad_buf.extend(pcm)
-        if len(self._vad_buf) < self._VAD_MIN_BYTES:
-            # Not enough data yet — if in speech, still accumulate to speech_buf
-            if self._in_speech:
-                self._speech_buf.extend(pcm)
-                self._last_speech_time = time.monotonic()
-                self._cancel_silence_task()
-                self._silence_task = asyncio.create_task(self._silence_timeout())
-            return
 
-        # We have enough data — run VAD on the accumulated buffer
-        vad_chunk = bytes(self._vad_buf)
-        self._vad_buf = bytearray()
+        while len(self._vad_buf) >= self._VAD_CHUNK_BYTES:
+            vad_chunk = bytes(self._vad_buf[:self._VAD_CHUNK_BYTES])
+            self._vad_buf = self._vad_buf[self._VAD_CHUNK_BYTES:]
 
-        speech_detected = is_speech(vad_chunk)
-        logger.info(f"[stream {self.stream_id}] VAD on {len(vad_chunk)}B: {speech_detected}")
+            speech_detected = is_speech(vad_chunk)
+            logger.info(f"[stream {self.stream_id}] VAD on {len(vad_chunk)}B: {speech_detected}")
 
-        if speech_detected:
-            if not self._in_speech:
-                # Start of a new utterance
-                self._in_speech = True
-                self._speech_start_sample = self._total_samples - (len(vad_chunk) // 2)
-                self._speech_buf = bytearray()
-                self._last_partial_time = time.monotonic()
-                logger.info(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
+            if speech_detected:
+                if not self._in_speech:
+                    # Start of a new utterance
+                    self._in_speech = True
+                    self._speech_start_sample = self._total_samples - (len(self._vad_buf) // 2) - (len(vad_chunk) // 2)
+                    self._speech_buf = bytearray()
+                    self._last_partial_time = time.monotonic()
+                    logger.info(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
 
-            self._speech_buf.extend(vad_chunk)
-            self._last_speech_time = time.monotonic()
-
-            # Cancel any pending silence timer and restart it
-            self._cancel_silence_task()
-            self._silence_task = asyncio.create_task(self._silence_timeout())
-
-            # Emit partial if interval elapsed
-            now = time.monotonic()
-            if (now - self._last_partial_time) * 1000 >= config.PARTIAL_INTERVAL_MS:
-                self._last_partial_time = now
-                asyncio.create_task(self._emit_partial())
-
-            # Force final if utterance is too long
-            buf_ms = len(self._speech_buf) // BYTES_PER_MS
-            if buf_ms >= config.MAX_UTTERANCE_MS:
-                logger.debug(f"[stream {self.stream_id}] Max utterance length reached, forcing final.")
-                self._cancel_silence_task()
-                asyncio.create_task(self._emit_final())
-        else:
-            # No speech in this VAD window — if we were in speech, the silence
-            # timeout task will handle the transition
-            if self._in_speech:
                 self._speech_buf.extend(vad_chunk)
                 self._last_speech_time = time.monotonic()
+
+                # Cancel any pending silence timer and restart it
+                self._cancel_silence_task()
+                self._silence_task = asyncio.create_task(self._silence_timeout())
+
+                # Emit partial if interval elapsed
+                now = time.monotonic()
+                if (now - self._last_partial_time) * 1000 >= config.PARTIAL_INTERVAL_MS:
+                    self._last_partial_time = now
+                    asyncio.create_task(self._emit_partial())
+
+                # Force final if utterance is too long
+                buf_ms = len(self._speech_buf) // BYTES_PER_MS
+                if buf_ms >= config.MAX_UTTERANCE_MS:
+                    logger.debug(f"[stream {self.stream_id}] Max utterance length reached, forcing final.")
+                    self._cancel_silence_task()
+                    asyncio.create_task(self._emit_final())
+            else:
+                # No speech in this VAD window — if we were in speech, the silence
+                # timeout task will handle the transition
+                if self._in_speech:
+                    self._speech_buf.extend(vad_chunk)
+                    self._last_speech_time = time.monotonic()
 
     async def _silence_timeout(self) -> None:
         """Wait for END_SILENCE_MS then emit final."""
@@ -171,16 +166,23 @@ class AudioStream:
 
         # Flush any leftover VAD pre-buffer as a final VAD check
         if self._vad_buf:
-            vad_chunk = bytes(self._vad_buf)
+            # Pad the leftover buffer to exactly 512 samples (1024 bytes) with zeros
+            # so Silero VAD doesn't raise ValueError on the final chunk.
+            leftover = bytes(self._vad_buf)
             self._vad_buf = bytearray()
+            pad_needed = self._VAD_CHUNK_BYTES - len(leftover)
+            if pad_needed > 0:
+                vad_chunk = leftover + bytes(pad_needed)
+            else:
+                vad_chunk = leftover[:self._VAD_CHUNK_BYTES]
             if is_speech(vad_chunk):
                 if not self._in_speech:
                     self._in_speech = True
-                    self._speech_start_sample = self._total_samples - (len(vad_chunk) // 2)
+                    self._speech_start_sample = self._total_samples - (len(leftover) // 2)
                     self._speech_buf = bytearray()
-                self._speech_buf.extend(vad_chunk)
+                self._speech_buf.extend(leftover)  # append only real samples, not padding
             elif self._in_speech:
-                self._speech_buf.extend(vad_chunk)
+                self._speech_buf.extend(leftover)
 
         logger.info(f"[stream {self.stream_id}] close() in_speech={self._in_speech} buf={len(self._speech_buf)}B")
         if self._in_speech and self._speech_buf:
