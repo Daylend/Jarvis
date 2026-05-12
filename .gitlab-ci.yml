@@ -37,7 +37,7 @@ build-docker:
     - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
   script:
     - echo "Building bot Docker image..."
-    - docker build -t "$DOCKER_IMAGE" -t "$LATEST_IMAGE" -f docker/Dockerfile .
+    - docker build --build-arg BUILD_SHA="$CI_COMMIT_SHA" -t "$DOCKER_IMAGE" -t "$LATEST_IMAGE" -f docker/Dockerfile .
     - echo "Pushing bot image to registry $DOCKER_REGISTRY"
     - docker push "$DOCKER_IMAGE"
     - docker push "$LATEST_IMAGE"
@@ -71,6 +71,7 @@ build-asr:
         --file services/asr/Dockerfile \
         --tag "$ASR_IMAGE" \
         --tag "$ASR_LATEST_IMAGE" \
+        --build-arg BUILD_SHA="$CI_COMMIT_SHA" \
         --cache-from "type=registry,ref=$ASR_CACHE_IMAGE" \
         --cache-to "type=registry,ref=$ASR_CACHE_IMAGE,mode=max" \
         --push \

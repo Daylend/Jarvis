@@ -38,6 +38,13 @@ RUN --mount=type=cache,target=/ccache \
 # ── Stage 2: Python runtime ───────────────────────────────────────────────────
 FROM ubuntu:24.04
 
+# Embed the commit SHA as a label so the image manifest digest always changes
+# on every push, even when all layers are cache hits. Watchtower compares
+# manifest digests — without this, a fully-cached build produces the same
+# digest as the previous :latest and Watchtower skips the pull.
+ARG BUILD_SHA=dev
+LABEL org.opencontainers.image.revision="${BUILD_SHA}"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

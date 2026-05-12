@@ -33,6 +33,13 @@ RUN npm run build
 
 FROM node:22-alpine
 
+# Embed the commit SHA as a label so the image manifest digest always changes
+# on every push, even when all layers are cache hits. Watchtower compares
+# manifest digests — without this, a fully-cached build produces the same
+# digest as the previous :latest and Watchtower skips the pull.
+ARG BUILD_SHA=dev
+LABEL org.opencontainers.image.revision="${BUILD_SHA}"
+
 # Install runtime deps: OpenSSL (Prisma), ffmpeg + opus (audio pipeline),
 # libstdc++ (required by @discordjs/opus native addon on Alpine),
 # shadow + su-exec (entrypoint user switching)
