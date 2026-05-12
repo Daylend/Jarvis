@@ -31,7 +31,13 @@ export function registerOwnerWatch(client: Client): void {
           startedBy: config.ownerId,
         });
       } catch (err) {
-        console.error('[owner-watch] Failed to start session:', err);
+        const msg = (err as Error).message ?? '';
+        if (msg.includes('already in progress')) {
+          // Duplicate VoiceStateUpdate fired — safe to ignore
+          console.debug('[owner-watch] Ignoring duplicate start request (already in progress)');
+        } else {
+          console.error('[owner-watch] Failed to start session:', err);
+        }
       }
     } else {
       // Owner left voice entirely

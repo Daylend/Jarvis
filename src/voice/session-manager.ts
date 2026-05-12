@@ -17,8 +17,26 @@ interface StartOpts {
 class SessionManager {
   private byGuild = new Map<string, SessionContext>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Guilds where a start() is currently in-flight — prevents concurrent starts */
+  private starting = new Set<string>();
 
   async start(opts: StartOpts): Promise<SessionContext> {
+    const { guild, voiceChannel, startedBy } = opts;
+
+    // Guard against concurrent start() calls for the same guild
+    if (this.starting.has(guild.id)) {
+      throw new Error(`Session start already in progress for guild ${guild.id}`);
+    }
+    this.starting.add(guild.id);
+
+    try {
+      return await this._start(opts);
+    } finally {
+      this.starting.delete(guild.id);
+    }
+  }
+
+  private async _start(opts: StartOpts): Promise<SessionContext> {
     const { guild, voiceChannel, startedBy } = opts;
 
     // Tear down any existing session in this guild first
@@ -67,17 +85,22 @@ class SessionManager {
     this.byGuild.set(guild.id, ctx);
     console.log(`[session] Started session ${ctx.id} in guild ${guild.id} channel ${voiceChannel.id}`);
 
-    // Handle unexpected disconnects
+    // Handle unexpected disconnects — attempt to reconnect, then give up.
+    // Per @discordjs/voice docs: on Disconnected, call rejoin() to trigger
+    // a reconnect attempt, then wait up to 15s for Connecting or Signalling.
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try {
-        // Try to reconnect once
+        connection.rejoin();
         await Promise.race([
-          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          entersState(connection, VoiceConnectionStatus.Signalling, 15_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 15_000),
         ]);
       } catch {
-        console.warn(`[session] Connection lost for session ${ctx.id}, stopping.`);
-        await this.stop(guild.id, 'disconnected').catch(() => {});
+        // Reconnect failed — only stop if this session is still the active one
+        if (this.byGuild.get(guild.id) === ctx) {
+          console.warn(`[session] Connection lost for session ${ctx.id}, stopping.`);
+          await this.stop(guild.id, 'disconnected').catch(() => {});
+        }
       }
     });
 

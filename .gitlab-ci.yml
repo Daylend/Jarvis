@@ -46,6 +46,7 @@ build-docker:
 # NOTE: This job compiles whisper.cpp from source with Vulkan support.
 # The build takes ~10-15 minutes on first run; subsequent runs benefit from
 # Docker layer caching if the runner has a persistent cache volume.
+# Triggered manually to avoid a slow rebuild on every bot-only push.
 build-asr:
   stage: build
   image: docker:20.10.16
@@ -63,7 +64,9 @@ build-asr:
     - docker push $ASR_LATEST_IMAGE
     - echo "Successfully built and pushed $ASR_IMAGE"
     - echo "Also tagged and pushed as $ASR_LATEST_IMAGE"
-  only:
-    - main
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: true
   tags:
     - docker
