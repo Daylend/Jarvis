@@ -5,15 +5,21 @@ stages:
 
 variables:
   DOCKER_REGISTRY: registry.example.com
+  # Bot image
   DOCKER_IMAGE_NAME: paxfax
   DOCKER_IMAGE_TAG: $CI_COMMIT_SHA
   DOCKER_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
   LATEST_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:latest
-  # Add Docker configuration variables
+  # ASR sidecar image
+  ASR_IMAGE_NAME: paxfax-asr
+  ASR_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:$CI_COMMIT_SHA
+  ASR_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:latest
+  # Docker configuration
   DOCKER_TLS_CERTDIR: ""  # Disable TLS
   DOCKER_HOST: tcp://docker:2375
   DOCKER_DRIVER: overlay2
 
+# ── Bot ───────────────────────────────────────────────────────────────────────
 build-docker:
   stage: build
   image: docker:20.10.16
@@ -24,13 +30,39 @@ build-docker:
   before_script:
     - if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then echo "Logging in to Docker registry $DOCKER_REGISTRY"; docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $DOCKER_REGISTRY; fi
   script:
-    - echo "Building Docker image from Dockerfile..."
+    - echo "Building bot Docker image..."
     - docker build -t $DOCKER_IMAGE -t $LATEST_IMAGE -f docker/Dockerfile .
-    - echo "Pushing Docker image to registry $DOCKER_REGISTRY"
+    - echo "Pushing bot image to registry $DOCKER_REGISTRY"
     - docker push $DOCKER_IMAGE
     - docker push $LATEST_IMAGE
-    - echo "Successfully built and pushed image $DOCKER_IMAGE"
+    - echo "Successfully built and pushed $DOCKER_IMAGE"
     - echo "Also tagged and pushed as $LATEST_IMAGE"
+  only:
+    - main
+  tags:
+    - docker
+
+# ── ASR Sidecar ───────────────────────────────────────────────────────────────
+# NOTE: This job compiles whisper.cpp from source with Vulkan support.
+# The build takes ~10-15 minutes on first run; subsequent runs benefit from
+# Docker layer caching if the runner has a persistent cache volume.
+build-asr:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - name: docker:20.10.16-dind
+      command: ["--tls=false"]
+      alias: docker
+  before_script:
+    - if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then echo "Logging in to Docker registry $DOCKER_REGISTRY"; docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $DOCKER_REGISTRY; fi
+  script:
+    - echo "Building ASR sidecar image (whisper.cpp + Vulkan — may take ~10-15 min)..."
+    - docker build -t $ASR_IMAGE -t $ASR_LATEST_IMAGE -f services/asr/Dockerfile .
+    - echo "Pushing ASR sidecar image to registry $DOCKER_REGISTRY"
+    - docker push $ASR_IMAGE
+    - docker push $ASR_LATEST_IMAGE
+    - echo "Successfully built and pushed $ASR_IMAGE"
+    - echo "Also tagged and pushed as $ASR_LATEST_IMAGE"
   only:
     - main
   tags:

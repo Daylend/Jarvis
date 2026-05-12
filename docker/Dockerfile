@@ -2,8 +2,18 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+# Install build deps: OpenSSL for Prisma, plus native build tools for @discordjs/opus,
+# and ffmpeg + libopus for prism-media audio pipeline
+RUN apk add --no-cache \
+    openssl \
+    python3 \
+    make \
+    g++ \
+    libtool \
+    autoconf \
+    automake \
+    ffmpeg \
+    libopus-dev
 
 # Copy package files first for better layer caching
 COPY package*.json ./
@@ -24,8 +34,8 @@ RUN npm run build
 
 FROM node:18-alpine
 
-# Install OpenSSL, shadow (for usermod), su-exec, and fix for Prisma engine on Alpine Linux
-RUN apk add --no-cache openssl shadow su-exec && \
+# Install runtime deps: OpenSSL (Prisma), ffmpeg + libopus (prism-media), shadow + su-exec (entrypoint)
+RUN apk add --no-cache openssl shadow su-exec ffmpeg libopus && \
     ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3
 
 WORKDIR /app

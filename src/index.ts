@@ -6,6 +6,7 @@ import { angryResponses } from './angry-responses';
 import { getContext, setContext } from './ai-context';
 import { getChannelUnlock } from './channel-lock';
 import { resolveMentions } from './utils';
+import { bootstrapVoice, sessionManager } from './voice';
 import axios from 'axios';
 
 const client = new Client({
@@ -14,6 +15,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates,
   ],
 });
 
@@ -22,8 +24,9 @@ for (const command of commands) {
   commandMap.set(command.data.name, command);
 }
 
-client.once(Events.ClientReady, c => {
+client.once(Events.ClientReady, async (c) => {
   console.log(`Ready! Logged in as ${c.user.tag}`);
+  await bootstrapVoice(client);
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -232,5 +235,23 @@ client.on(Events.MessageCreate, async message => {
     }
   }
 });
+
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[shutdown] Received ${signal}, shutting down gracefully...`);
+  try {
+    await sessionManager.shutdownAll();
+    console.log('[shutdown] All voice sessions closed.');
+  } catch (err) {
+    console.error('[shutdown] Error during voice teardown:', err);
+  }
+  await prisma.$disconnect();
+  client.destroy();
+  process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 client.login(config.discordToken);

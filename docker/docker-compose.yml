@@ -13,6 +13,47 @@ services:
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=info
       - LOG_DIR=/app/logs
+      - TRANSCRIBE_WS_URL=ws://asr:8765/ws/transcribe
+      - TRANSCRIBE_HTTP_URL=http://asr:8765
+      - AUTO_JOIN_OWNER=true
+      - TRIGGER_PHRASE=jarvis
+      - JARVIS_CONTEXT_SECONDS=180
+      - VOICE_IDLE_TIMEOUT_SEC=900
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      asr:
+        condition: service_healthy
+
+  asr:
+    build:
+      context: ..
+      dockerfile: services/asr/Dockerfile
+    restart: unless-stopped
+    environment:
+      - MODEL_PATH=/app/models/ggml-large-v3-turbo-q5_0.bin
+      - DEVICE=vulkan
+      - VAD_THRESHOLD=0.5
+      - END_SILENCE_MS=700
+      - MAX_UTTERANCE_MS=25000
+    volumes:
+      - ../data/asr-models:/app/models
+    ports:
+      - "8765:8765"
+    # AMD GPU / Vulkan access via /dev/dri
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     logging:
       driver: "json-file"
       options:

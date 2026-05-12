@@ -22,3 +22,46 @@ model AIProvider {
   addedBy   String?
   createdAt DateTime @default(now())
 }
+
+model VoiceSession {
+  id          String       @id @default(cuid())
+  guildId     String
+  channelId   String
+  startedAt   DateTime     @default(now())
+  endedAt     DateTime?
+  startedBy   String
+  transcripts Transcript[]
+
+  @@index([guildId, startedAt])
+}
+
+model Transcript {
+  id             Int          @id @default(autoincrement())
+  sessionId      String
+  session        VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  guildId        String
+  channelId      String
+  userId         String
+  startMs        Int
+  endMs          Int
+  textRaw        String
+  textNormalized String
+  confidence     Float?
+  createdAt      DateTime     @default(now())
+
+  @@index([sessionId, startMs])
+  @@index([userId, createdAt])
+  @@index([channelId, createdAt])
+  @@index([guildId, createdAt])
+}
+
+model TermAlias {
+  id        Int      @id @default(autoincrement())
+  canonical String
+  alias     String
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([canonical, alias], name: "canonical_alias")
+  @@index([alias])
+}

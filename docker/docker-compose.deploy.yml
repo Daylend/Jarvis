@@ -19,6 +19,48 @@ services:
       - OWNER_USER_ID=${OWNER_USER_ID}
       - OPENWEBUI_API_URL=${OPENWEBUI_API_URL}
       - OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}
+      - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr:8765/ws/transcribe}
+      - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr:8765}
+      - AUTO_JOIN_OWNER=${AUTO_JOIN_OWNER:-true}
+      - TRIGGER_PHRASE=${TRIGGER_PHRASE:-jarvis}
+      - JARVIS_CONTEXT_SECONDS=${JARVIS_CONTEXT_SECONDS:-180}
+      - VOICE_IDLE_TIMEOUT_SEC=${VOICE_IDLE_TIMEOUT_SEC:-900}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - deploy
+    depends_on:
+      asr:
+        condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  asr:
+    image: registry.example.com/paxfax-asr:latest
+    container_name: paxfax-asr
+    restart: unless-stopped
+    environment:
+      - MODEL_PATH=/app/models/ggml-large-v3-turbo-q5_0.bin
+      - DEVICE=${ASR_DEVICE:-vulkan}
+      - VAD_THRESHOLD=${VAD_THRESHOLD:-0.5}
+      - END_SILENCE_MS=${END_SILENCE_MS:-700}
+      - MAX_UTTERANCE_MS=${MAX_UTTERANCE_MS:-25000}
+    volumes:
+      - /mnt/user/appdata/paxfax/asr-models:/app/models
+    # AMD GPU / Vulkan access via /dev/dri
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
