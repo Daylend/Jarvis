@@ -4,5 +4,3 @@ dist
 data/
 *.log
 .DS_Store
-*.db*
-tts-service/LuxTTS
