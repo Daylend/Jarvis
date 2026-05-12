@@ -75,12 +75,23 @@ class AsrClient {
 
   // ─── Audio data ───────────────────────────────────────────────────────────
 
+  /** streamId -> number of PCM chunks sent (for diagnostic throttling) */
+  private sendPcmCount = new Map<number, number>();
+
   sendPcm(ctx: SessionContext, streamId: number, pcm: Buffer): void {
     const state = this.sessions.get(ctx.id);
-    if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) return;
-    if ((state.ws as any).bufferedAmount > MAX_BUFFERED) {
-      // Drop frame — log at most once per second to avoid spam
+    if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) {
+      console.warn(`[asr-client] sendPcm stream=${streamId} bytes=${pcm.length} — WS not open (readyState=${state?.ws?.readyState ?? 'no-ws'})`);
       return;
+    }
+    if ((state.ws as any).bufferedAmount > MAX_BUFFERED) {
+      console.warn(`[asr-client] sendPcm: dropping frame — bufferedAmount=${(state.ws as any).bufferedAmount} > ${MAX_BUFFERED}`);
+      return;
+    }
+    const n = (this.sendPcmCount.get(streamId) ?? 0) + 1;
+    this.sendPcmCount.set(streamId, n);
+    if (n <= 5) {
+      console.log(`[asr-client] sendPcm stream=${streamId} chunk=${n} bytes=${pcm.length} wsState=${state.ws.readyState}`);
     }
     const header = Buffer.allocUnsafe(4);
     header.writeUInt32LE(streamId, 0);
@@ -129,7 +140,12 @@ class AsrClient {
     ws.on('message', (data, isBinary) => {
       if (isBinary) return; // server should not send binary
       try {
-        const msg: AsrMessage = JSON.parse(data.toString());
+        const raw = data.toString();
+        const msg: AsrMessage = JSON.parse(raw);
+        // DIAGNOSTIC: log every message received from the ASR sidecar
+        if (msg.type !== 'pong') {
+          console.log(`[asr-client] ← received type="${msg.type}" streamId=${(msg as any).streamId ?? 'n/a'} text=${JSON.stringify((msg as any).text ?? '')}`);
+        }
         this.handleMessage(state, msg);
       } catch (err) {
         console.error('[asr-client] Failed to parse message:', err);
@@ -195,7 +211,10 @@ class AsrClient {
   }
 
   private async handleFinal(state: SessionState, msg: AsrMessage): Promise<void> {
-    if (msg.streamId === undefined || !msg.text) return;
+    if (msg.streamId === undefined || !msg.text) {
+      console.warn(`[asr-client] handleFinal dropped — streamId=${msg.streamId} text=${JSON.stringify(msg.text)}`);
+      return;
+    }
 
     const userId = state.streamUsers.get(msg.streamId);
     if (!userId) {
@@ -208,7 +227,9 @@ class AsrClient {
     const replacements = msg.text !== textNormalized
       ? ` (${(msg.text.split(' ').length - textNormalized.split(' ').length)} replacements)`
       : '';
-    console.log(`[asr] [${userId}] "${msg.text}"${replacements}`);
+    // Primary transcript log — "User: hello world"
+    console.log(`[transcript] User ${userId}: ${textNormalized}${replacements}`);
+    console.log(`[asr] [${userId}] raw="${msg.text}"${replacements}`);
 
     await transcriptStore.save({
       sessionId: state.ctx.id,

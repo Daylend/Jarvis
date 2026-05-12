@@ -24,8 +24,11 @@ for (const command of commands) {
   commandMap.set(command.data.name, command);
 }
 
+// Build-time stamp — update this string when deploying to confirm new image is running
+const BUILD_STAMP = '2026-05-12T06:53:00Z [debug-pcm-logging]';
+
 client.once(Events.ClientReady, async (c) => {
-  console.log(`Ready! Logged in as ${c.user.tag}`);
+  console.log(`Ready! Logged in as ${c.user.tag} | build: ${BUILD_STAMP}`);
   await bootstrapVoice(client);
 });
 

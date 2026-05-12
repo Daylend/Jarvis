@@ -1,8 +1,12 @@
-import { EndBehaviorType } from '@discordjs/voice';
+import { EndBehaviorType, generateDependencyReport } from '@discordjs/voice';
+import { PassThrough } from 'stream';
 import * as prism from 'prism-media';
 import { asrClient } from './asr-client';
 import { sessionManager } from './session-manager';
 import type { SessionContext, ActiveStream } from './types';
+
+// Print dependency report once at module load so we can see which Opus/sodium libs are active
+console.log('[receiver] Dependency report:\n' + generateDependencyReport());
 
 class PerUserReceiver {
   /** sessionId -> (userId -> ActiveStream) */
@@ -30,19 +34,30 @@ class PerUserReceiver {
   }
 
   private openStream(ctx: SessionContext, userId: string): void {
+    console.log('[receiver] BUILD MARK pcm-debug-v1');
     const map = this.active.get(ctx.id);
     if (!map) return;
     if (map.has(userId)) return; // already subscribed for this user
 
     const streamId = this.nextStreamId++;
 
-    // Subscribe to the user's Opus stream; end after 800ms of silence
+    // Subscribe to the user's Opus stream — use Manual end while debugging so the
+    // stream doesn't close before we can confirm packets are arriving
     const opusStream = ctx.connection.receiver.subscribe(userId, {
       end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: 800,
+        behavior: EndBehaviorType.Manual,
       },
     });
+
+    // Auto-close after 5s of silence (replaces AfterSilence while debugging)
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetSilenceTimer = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        console.log(`[receiver] [stream ${streamId}] silence timeout — destroying opusStream`);
+        opusStream.destroy();
+      }, 1500);
+    };
 
     // Decode Opus (48kHz stereo) to raw PCM s16le
     const decoder = new prism.opus.Decoder({
@@ -65,17 +80,42 @@ class PerUserReceiver {
     // Notify ASR client that this stream is opening
     asrClient.openStream(ctx, streamId, userId);
 
-    // Pipe audio through the chain
-    opusStream.pipe(decoder).pipe(ffmpeg);
+    // Tap the opus stream via a PassThrough so we can count packets without
+    // splitting the pipe (adding a 'data' listener AND piping would split the stream)
+    let opusPackets = 0;
+    const opusTap = new PassThrough();
+    opusTap.on('data', (packet: Buffer) => {
+      opusPackets++;
+      resetSilenceTimer();
+      if (opusPackets <= 5) {
+        console.log(`[receiver] [stream ${streamId}] raw opus packet ${opusPackets}: ${packet.length}B`);
+      }
+    });
 
-    ffmpeg.on('data', (pcm: Buffer) => {
+    // Pipe audio through the chain: opusStream → tap → decoder → ffmpeg
+    opusStream.pipe(opusTap).pipe(decoder).pipe(ffmpeg);
+
+    ffmpeg.on('data', (chunk: Buffer) => {
+      console.log(`[receiver] FFmpeg PCM ${chunk.length}B`);
       sessionManager.noteActivity(ctx.guildId);
-      asrClient.sendPcm(ctx, streamId, pcm);
+      asrClient.sendPcm(ctx, streamId, chunk);
     });
 
     ffmpeg.on('error', (err: Error) => {
-      console.error(`[receiver] FFmpeg error for user ${userId}:`, err.message);
+      console.error('[receiver] FFmpeg error', err);
       cleanup();
+    });
+
+    decoder.on('error', (err: Error) => {
+      console.error('[receiver] Opus decoder error', err);
+    });
+
+    opusStream.on('end', () => {
+      console.log('[receiver] opusStream ended');
+    });
+
+    opusStream.on('close', () => {
+      console.log('[receiver] opusStream closed');
     });
 
     const cleanup = () => {
