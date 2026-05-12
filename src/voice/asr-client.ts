@@ -75,9 +75,6 @@ class AsrClient {
 
   // ─── Audio data ───────────────────────────────────────────────────────────
 
-  /** streamId -> number of PCM chunks sent (for diagnostic throttling) */
-  private sendPcmCount = new Map<number, number>();
-
   sendPcm(ctx: SessionContext, streamId: number, pcm: Buffer): void {
     const state = this.sessions.get(ctx.id);
     if (!state?.ws || state.ws.readyState !== WebSocket.OPEN) {
@@ -87,11 +84,6 @@ class AsrClient {
     if ((state.ws as any).bufferedAmount > MAX_BUFFERED) {
       console.warn(`[asr-client] sendPcm: dropping frame — bufferedAmount=${(state.ws as any).bufferedAmount} > ${MAX_BUFFERED}`);
       return;
-    }
-    const n = (this.sendPcmCount.get(streamId) ?? 0) + 1;
-    this.sendPcmCount.set(streamId, n);
-    if (n <= 5) {
-      console.log(`[asr-client] sendPcm stream=${streamId} chunk=${n} bytes=${pcm.length} wsState=${state.ws.readyState}`);
     }
     const header = Buffer.allocUnsafe(4);
     header.writeUInt32LE(streamId, 0);
@@ -140,12 +132,7 @@ class AsrClient {
     ws.on('message', (data, isBinary) => {
       if (isBinary) return; // server should not send binary
       try {
-        const raw = data.toString();
-        const msg: AsrMessage = JSON.parse(raw);
-        // DIAGNOSTIC: log every message received from the ASR sidecar
-        if (msg.type !== 'pong') {
-          console.log(`[asr-client] ← received type="${msg.type}" streamId=${(msg as any).streamId ?? 'n/a'} text=${JSON.stringify((msg as any).text ?? '')}`);
-        }
+        const msg: AsrMessage = JSON.parse(data.toString());
         this.handleMessage(state, msg);
       } catch (err) {
         console.error('[asr-client] Failed to parse message:', err);

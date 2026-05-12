@@ -3,12 +3,15 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Install build deps: OpenSSL for Prisma, ffmpeg + opus for prism-media audio pipeline.
-# No native build tools needed: opusscript (replaces @discordjs/opus) and
-# libsodium-wrappers (replaces sodium-native) are both pure JS — no C toolchain required.
+# python3/make/g++/opus-dev are required to compile @discordjs/opus (native Node addon).
+# libsodium-wrappers is pure JS — no extra deps needed for encryption.
 RUN apk add --no-cache \
     openssl \
     ffmpeg \
-    opus-dev
+    opus-dev \
+    python3 \
+    make \
+    g++
 
 # Copy package files first for better layer caching
 COPY package*.json ./
@@ -30,8 +33,10 @@ RUN npm run build
 
 FROM node:22-alpine
 
-# Install runtime deps: OpenSSL (Prisma), ffmpeg + opus (prism-media), shadow + su-exec (entrypoint)
-RUN apk add --no-cache openssl shadow su-exec ffmpeg opus && \
+# Install runtime deps: OpenSSL (Prisma), ffmpeg + opus (audio pipeline),
+# libstdc++ (required by @discordjs/opus native addon on Alpine),
+# shadow + su-exec (entrypoint user switching)
+RUN apk add --no-cache openssl shadow su-exec ffmpeg opus libstdc++ && \
     ln -s /usr/lib/libssl.so.3 /lib/libssl.so.3
 
 WORKDIR /app

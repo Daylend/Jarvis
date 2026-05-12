@@ -54,15 +54,7 @@ class AudioStream:
             return
 
         chunk_samples = len(pcm) // 2
-        chunk_ms = len(pcm) // BYTES_PER_MS
         speech_detected = is_speech(pcm)
-
-        # DIAGNOSTIC: log every chunk so we can see sizes and VAD decisions
-        logger.debug(
-            f"[stream {self.stream_id}] push_pcm: {len(pcm)} bytes / {chunk_samples} samples / "
-            f"~{chunk_ms}ms — VAD={speech_detected} — in_speech={self._in_speech} — "
-            f"buf={len(self._speech_buf)} bytes"
-        )
 
         if speech_detected:
             if not self._in_speech:
@@ -71,7 +63,7 @@ class AudioStream:
                 self._speech_start_sample = self._total_samples
                 self._speech_buf = bytearray()
                 self._last_partial_time = time.monotonic()
-                logger.info(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample} (chunk={len(pcm)}B/{chunk_ms}ms)")
+                logger.debug(f"[stream {self.stream_id}] Speech started at sample {self._speech_start_sample}")
 
             self._speech_buf.extend(pcm)
             self._last_speech_time = time.monotonic()
@@ -123,21 +115,17 @@ class AudioStream:
     async def _emit_final(self) -> None:
         if not self._speech_buf:
             self._in_speech = False
-            logger.debug(f"[stream {self.stream_id}] _emit_final called but speech_buf is empty — skipping")
             return
 
         buf = bytes(self._speech_buf)
         start_sample = self._speech_start_sample
-        buf_ms = len(buf) // BYTES_PER_MS
 
         # Reset state before async work so new speech can start immediately
         self._speech_buf = bytearray()
         self._in_speech = False
         self._cancel_silence_task()
 
-        logger.info(f"[stream {self.stream_id}] Sending {len(buf)}B / ~{buf_ms}ms to whisper for transcription")
         result = await asr_module.transcribe(buf, start_sample)
-        logger.info(f"[stream {self.stream_id}] Whisper result: {result!r}")
         if result:
             await self._send_cb({
                 "type": "final",
@@ -147,15 +135,9 @@ class AudioStream:
                 "endMs": result["endMs"],
                 "confidence": result.get("confidence"),
             })
-        else:
-            logger.warning(f"[stream {self.stream_id}] Whisper returned None/empty for {buf_ms}ms of audio")
 
     async def close(self) -> None:
         """Flush any remaining speech buffer as a final, then clean up."""
         self._cancel_silence_task()
-        logger.info(
-            f"[stream {self.stream_id}] close() called — in_speech={self._in_speech} "
-            f"buf={len(self._speech_buf)}B"
-        )
         if self._in_speech and self._speech_buf:
             await self._emit_final()

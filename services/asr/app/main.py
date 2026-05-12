@@ -18,8 +18,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-# Enable DEBUG for the stream module so VAD chunk diagnostics are visible
-logging.getLogger("app.stream").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
