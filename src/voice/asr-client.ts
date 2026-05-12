@@ -133,6 +133,7 @@ class AsrClient {
       if (isBinary) return; // server should not send binary
       try {
         const msg: AsrMessage = JSON.parse(data.toString());
+        console.log('[asr-client] incoming message:', JSON.stringify(msg));
         this.handleMessage(state, msg);
       } catch (err) {
         console.error('[asr-client] Failed to parse message:', err);

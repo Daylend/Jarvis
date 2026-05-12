@@ -51,6 +51,12 @@ class AudioStream:
         self._last_speech_time = 0.0         # monotonic time of last speech chunk
         self._last_partial_time = 0.0        # monotonic time of last partial emit
 
+        # Guard: True while a transcribe() call is in-flight for this stream.
+        # Prevents _emit_partial and _emit_final from submitting concurrent inference
+        # requests on the same stream, which would block the executor and cause the
+        # silence timeout to resubmit the same buffer after a 23s stall.
+        self._inferring = False
+
         # Background task for silence timeout
         self._silence_task: asyncio.Task | None = None
 
@@ -114,9 +120,17 @@ class AudioStream:
     async def _silence_timeout(self) -> None:
         """Wait for END_SILENCE_MS then emit final."""
         await asyncio.sleep(config.END_SILENCE_MS / 1000.0)
+        logger.info(
+            f"[stream {self.stream_id}] Silence timeout fired: "
+            f"in_speech={self._in_speech} speech_buf={len(self._speech_buf)}B"
+        )
         if self._in_speech and self._speech_buf:
-            logger.debug(f"[stream {self.stream_id}] Silence timeout, emitting final.")
             await self._emit_final()
+        else:
+            logger.warning(
+                f"[stream {self.stream_id}] Silence timeout: nothing to emit "
+                f"(in_speech={self._in_speech} buf={len(self._speech_buf)}B)"
+            )
 
     def _cancel_silence_task(self) -> None:
         if self._silence_task and not self._silence_task.done():
@@ -124,9 +138,14 @@ class AudioStream:
         self._silence_task = None
 
     async def _emit_partial(self) -> None:
-        if not self._speech_buf:
+        if not self._speech_buf or self._inferring:
             return
-        result = await asr_module.transcribe(bytes(self._speech_buf), self._speech_start_sample)
+        # Partials are best-effort: skip if inference is already running
+        self._inferring = True
+        try:
+            result = await asr_module.transcribe(bytes(self._speech_buf), self._speech_start_sample)
+        finally:
+            self._inferring = False
         if result:
             await self._send_cb({
                 "type": "partial",
@@ -139,18 +158,36 @@ class AudioStream:
     async def _emit_final(self) -> None:
         if not self._speech_buf:
             self._in_speech = False
+            logger.warning(f"[stream {self.stream_id}] _emit_final called with empty _speech_buf — skipping")
             return
+
+        if self._inferring:
+            # A partial is already running inference on this stream's buffer.
+            # Wait for it to finish before proceeding so we don't submit the
+            # same audio twice or race on _speech_buf.
+            logger.info(f"[stream {self.stream_id}] _emit_final: waiting for in-flight inference to finish")
+            while self._inferring:
+                await asyncio.sleep(0.05)
 
         buf = bytes(self._speech_buf)
         start_sample = self._speech_start_sample
+        buf_ms = len(buf) // BYTES_PER_MS
+
+        logger.info(f"[stream {self.stream_id}] _emit_final: buf={len(buf)}B ({buf_ms}ms), start_sample={start_sample}")
 
         # Reset state before async work so new speech can start immediately
         self._speech_buf = bytearray()
         self._in_speech = False
         self._cancel_silence_task()
 
-        result = await asr_module.transcribe(buf, start_sample)
+        self._inferring = True
+        try:
+            result = await asr_module.transcribe(buf, start_sample)
+        finally:
+            self._inferring = False
+
         if result:
+            logger.info(f"[stream {self.stream_id}] _emit_final: sending final text={result['text']!r}")
             await self._send_cb({
                 "type": "final",
                 "streamId": self.stream_id,
@@ -159,6 +196,8 @@ class AudioStream:
                 "endMs": result["endMs"],
                 "confidence": result.get("confidence"),
             })
+        else:
+            logger.warning(f"[stream {self.stream_id}] _emit_final: transcribe() returned None for {buf_ms}ms of audio")
 
     async def close(self) -> None:
         """Flush any remaining speech buffer as a final, then clean up."""
