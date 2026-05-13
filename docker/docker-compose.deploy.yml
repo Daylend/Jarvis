@@ -43,27 +43,16 @@ services:
     container_name: paxfax-asr
     restart: unless-stopped
     environment:
-      - MODEL_PATH=/app/models/ggml-large-v3-turbo-q5_0.bin
-      - DEVICE=${ASR_DEVICE:-vulkan}
-      - VAD_THRESHOLD=${VAD_THRESHOLD:-0.5}
-      - END_SILENCE_MS=${END_SILENCE_MS:-700}
-      - MAX_UTTERANCE_MS=${MAX_UTTERANCE_MS:-25000}
-      # Force ggml-vulkan to select GPU 0 (required for AMD/ROCm Vulkan)
-      - GGML_VK_VISIBLE_DEVICES=${GGML_VK_VISIBLE_DEVICES:-0}
+      - MOONSHINE_MODEL_DIR=/app/models
+      - MOONSHINE_LANGUAGE=en
+      - MOONSHINE_UPDATE_INTERVAL=${MOONSHINE_UPDATE_INTERVAL:-0.25}
+      - MOONSHINE_VAD_THRESHOLD=${MOONSHINE_VAD_THRESHOLD:-0.5}
+      - MOONSHINE_VAD_WINDOW_DURATION=${MOONSHINE_VAD_WINDOW_DURATION:-0.25}
+      - MOONSHINE_VAD_MAX_SEGMENT_DURATION=${MOONSHINE_VAD_MAX_SEGMENT_DURATION:-10.0}
+      - MOONSHINE_LOG_ORT_RUNS=${MOONSHINE_LOG_ORT_RUNS:-true}
+      - MOONSHINE_LOG_OUTPUT_TEXT=${MOONSHINE_LOG_OUTPUT_TEXT:-true}
     volumes:
       - /mnt/user/appdata/paxfax/asr-models:/app/models
-    # AMD GPU / Vulkan + ROCm access (mirrors working llama-cpp-rocm config)
-    devices:
-      - /dev/kfd
-      - /dev/dri
-    group_add:
-      - video
-      - render
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp=unconfined
-    ipc: host
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s

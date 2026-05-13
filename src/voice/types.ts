@@ -28,10 +28,12 @@ export interface AsrSegment {
   confidence?: number | null;
 }
 
-/** Shape of a final/partial message received from the ASR sidecar */
+/** Shape of any message received from the ASR sidecar. The discriminator is `type`. */
 export interface AsrMessage {
   type: 'ready' | 'partial' | 'final' | 'error' | 'pong';
   streamId?: number;
+  /** Stable per-utterance id from Moonshine. Present on every `partial` and `final`. */
+  lineId?: number;
   text?: string;
   startMs?: number;
   endMs?: number;

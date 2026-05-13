@@ -1,180 +1,164 @@
 """
-whisper.cpp ASR wrapper via pywhispercpp.
+Moonshine Voice ASR wrapper. One Transcriber instance per audio stream.
 
-The Whisper model is loaded once at startup with the configured backend (Vulkan by default).
-Transcription runs in a ThreadPoolExecutor to avoid blocking the asyncio event loop.
+Moonshine listener callbacks fire on a background thread inside the
+moonshine-voice runtime. We bounce every event back to the asyncio loop
+that owns the WebSocket using asyncio.run_coroutine_threadsafe so we never
+touch the WebSocket from a non-loop thread.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+import os
+import time
+from typing import Awaitable, Callable
 
 import numpy as np
+from moonshine_voice import Transcriber, TranscriptEventListener
 
-from app.config import MODEL_PATH, DEVICE, SAMPLE_RATE
+from app import config
 
 logger = logging.getLogger(__name__)
 
-_model = None
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
-_model_loaded = False
-_vulkan_active = False
+EmitCb = Callable[[dict], Awaitable[None]]
 
 
-def _load_model():
-    """Load the whisper.cpp model. Called once at startup."""
-    global _model, _model_loaded, _vulkan_active
+class _Bridge(TranscriptEventListener):
+    """Bridges Moonshine line events into an asyncio coroutine on the WS loop."""
 
-    try:
-        from pywhispercpp.model import Model
-        import subprocess, shutil
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        emit: EmitCb,
+        stream_id: int,
+        timestamps: dict,
+    ):
+        self._loop = loop
+        self._emit = emit
+        self._stream_id = stream_id
+        # timestamps is shared with StreamHandler so both sides can stamp it.
+        # Shape: {"t": float | None, "last_pcm": float | None, "first_partial_seen": set[int]}
+        self._ts = timestamps
 
-        # GPU backend (Vulkan/CUDA) is selected purely at build time via CMake flags
-        # (-DGGML_VULKAN=ON). pywhispercpp.Model only accepts whisper_full_params
-        # fields as kwargs; gpu_device and n_gpu_layers are NOT valid fields and will
-        # raise AttributeError. No runtime GPU param is needed or supported.
-        use_gpu = DEVICE.lower() in ("vulkan", "cuda", "gpu")
+    def _push(self, payload: dict) -> None:
+        # Schedule on the WS event loop; this method runs on a Moonshine thread.
+        try:
+            asyncio.run_coroutine_threadsafe(self._emit(payload), self._loop)
+        except RuntimeError as e:
+            # Loop may have shut down during teardown; log once and drop.
+            logger.warning("[asr stream=%d] could not schedule emit: %s", self._stream_id, e)
 
-        # Log Vulkan device availability so we can confirm GPU passthrough is working
-        if use_gpu:
-            try:
-                vk_info = subprocess.run(
-                    ["vulkaninfo", "--summary"],
-                    capture_output=True, text=True, timeout=5
+    # Partial revisions of the in-progress line.
+    def on_line_text_changed(self, event):  # type: ignore[override]
+        line = event.line
+        line_id = int(line.line_id)
+        if line_id not in self._ts["first_partial_seen"]:
+            self._ts["first_partial_seen"].add(line_id)
+            t_first = self._ts.get("t")
+            if t_first is not None:
+                latency_ms = (time.monotonic() - t_first) * 1000.0
+                logger.info(
+                    "[asr-metrics] stream=%d lineId=%d chunk_ingest_to_first_partial_ms=%.1f",
+                    self._stream_id, line_id, latency_ms,
                 )
-                logger.info(f"[vulkan] vulkaninfo output:\n{vk_info.stdout[:2000]}")
-                if vk_info.returncode != 0:
-                    logger.warning(f"[vulkan] vulkaninfo failed (rc={vk_info.returncode}): {vk_info.stderr[:500]}")
-            except Exception as ve:
-                logger.warning(f"[vulkan] Could not run vulkaninfo: {ve}")
+        self._push({
+            "type": "partial",
+            "streamId": self._stream_id,
+            "lineId": line_id,
+            "text": line.text,
+            "startMs": int(line.start_time * 1000),
+            "endMs": int((line.start_time + line.duration) * 1000),
+        })
 
-        # Log the GGML_VK_VISIBLE_DEVICES env var so we can confirm it's set
-        import os
-        vk_dev = os.environ.get("GGML_VK_VISIBLE_DEVICES", "(not set)")
-        logger.info(f"Loading whisper model from {MODEL_PATH} (device={DEVICE}, GGML_VK_VISIBLE_DEVICES={vk_dev})")
-        _model = Model(
-            MODEL_PATH,
-            n_threads=4,
-            print_progress=False,
-            print_realtime=False,
-            print_timestamps=False,
-            # Disable whisper's built-in no-speech and low-confidence filters.
-            # Silero VAD already gates what reaches whisper, so we don't need
-            # whisper to second-guess it.
-            #
-            # whisper.cpp skips a segment when:
-            #   (a) no_speech_prob > no_speech_thold  [default: 0.6]
-            #   (b) avg_logprobs < logprob_thold AND no_speech_prob < no_speech_thold
-            #
-            # Setting no_speech_thold=1.0 makes condition (a) never true
-            # (no_speech_prob is in [0,1] so it can never exceed 1.0).
-            # Setting logprob_thold=-1.0 disables condition (b) (logprob is
-            # always > -1.0 for any real output).
-            no_speech_thold=1.0,
-            logprob_thold=-1.0,
+    # Authoritative final for a completed line.
+    def on_line_completed(self, event):  # type: ignore[override]
+        line = event.line
+        line_id = int(line.line_id)
+        last_pcm = self._ts.get("last_pcm")
+        if last_pcm is not None:
+            latency_ms = (time.monotonic() - last_pcm) * 1000.0
+            logger.info(
+                "[asr-metrics] stream=%d lineId=%d last_voiced_chunk_to_final_ms=%.1f",
+                self._stream_id, line_id, latency_ms,
+            )
+        self._push({
+            "type": "final",
+            "streamId": self._stream_id,
+            "lineId": line_id,
+            "text": line.text,
+            "startMs": int(line.start_time * 1000),
+            "endMs": int((line.start_time + line.duration) * 1000),
+            "confidence": None,
+        })
+
+
+def build_transcriber(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    emit: EmitCb,
+    stream_id: int,
+    timestamps: dict,
+) -> Transcriber:
+    """Create, configure, and start() a Transcriber. Caller owns shutdown."""
+    options = {
+        "return_audio_data": "false",
+        "identify_speakers": "false",
+        "vad_threshold": str(config.VAD_THRESHOLD),
+        "vad_window_duration": str(config.VAD_WINDOW_DURATION),
+        "vad_max_segment_duration": str(config.VAD_MAX_SEGMENT),
+        "log_ort_runs": "true" if config.LOG_ORT_RUNS else "false",
+        "log_output_text": "true" if config.LOG_OUTPUT_TEXT else "false",
+    }
+
+    if config.SAVE_INPUT_WAV_DIR:
+        os.makedirs(config.SAVE_INPUT_WAV_DIR, exist_ok=True)
+        options["save_input_wav_path"] = os.path.join(
+            config.SAVE_INPUT_WAV_DIR, f"stream-{stream_id}.wav"
         )
-        _model_loaded = True
-        _vulkan_active = use_gpu
-        logger.info("Whisper model loaded successfully.")
-    except Exception as e:
-        logger.error(f"Failed to load whisper model: {e}")
-        raise
+
+    transcriber = Transcriber(
+        model_path=config.MODEL_PATH,
+        model_arch=config.MODEL_ARCH,
+        update_interval=config.UPDATE_INTERVAL,
+        options=options,
+    )
+    transcriber.add_listener(_Bridge(loop, emit, stream_id, timestamps))
+    transcriber.start()
+    logger.info(
+        "[asr] Transcriber started stream=%d update_interval=%.3fs vad_window=%.3fs vad_max_segment=%.1fs",
+        stream_id, config.UPDATE_INTERVAL, config.VAD_WINDOW_DURATION, config.VAD_MAX_SEGMENT,
+    )
+    return transcriber
 
 
-def is_loaded() -> bool:
-    return _model_loaded
+def feed_pcm_s16le(transcriber: Transcriber, pcm_s16le: bytes) -> None:
+    """Convert s16le mono → float32 mono in [-1, 1] and feed Moonshine."""
+    if not pcm_s16le:
+        return
+    # numpy int16→float32 cast then divide. Use 32768.0 (not 32767) — matches the
+    # int16 range convention everywhere else in this codebase.
+    audio = np.frombuffer(pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
+    transcriber.add_audio(audio, config.SAMPLE_RATE)
 
 
-def is_vulkan() -> bool:
-    return _vulkan_active
+async def shutdown_transcriber(transcriber: Transcriber) -> None:
+    """stop() may block on internal threads; run in a worker thread."""
+    await asyncio.to_thread(transcriber.stop)
 
 
 def get_engine_info() -> dict:
     return {
-        "engine": "whisper.cpp",
-        "model": MODEL_PATH.split("/")[-1],
-        "vulkan": _vulkan_active,
+        "engine": "moonshine-voice",
+        "model": f"en-medium-streaming (arch={config.MODEL_ARCH})",
+        "vulkan": False,  # kept in the schema for backwards compat with /healthz
     }
 
 
-# whisper.cpp requires at least 1 second (16000 samples) of audio to produce
-# reliable output. Shorter clips are padded with silence to reach this minimum.
-_MIN_SAMPLES = SAMPLE_RATE  # 1 second
-
-
-def _transcribe_sync(pcm_float32: np.ndarray) -> list[dict]:
-    """
-    Synchronous transcription. Returns list of segment dicts:
-    [{"text": str, "t0": int, "t1": int}]  (t0/t1 in whisper centiseconds)
-    """
-    if _model is None:
-        return []
+def is_loaded() -> bool:
+    """We don't keep a global model anymore; healthz returns ready as soon as
+    the configured model file exists and is readable."""
     try:
-        # Pad to minimum length so whisper.cpp doesn't return empty segments
-        # for short utterances (e.g. "Hello" at ~500ms).
-        if len(pcm_float32) < _MIN_SAMPLES:
-            pad = np.zeros(_MIN_SAMPLES - len(pcm_float32), dtype=np.float32)
-            pcm_float32 = np.concatenate([pcm_float32, pad])
-
-        segments = _model.transcribe(pcm_float32, language="en")
-        return [
-            {
-                "text": seg.text.strip(),
-                "t0": seg.t0,   # centiseconds
-                "t1": seg.t1,
-            }
-            for seg in segments
-            if seg.text.strip()
-        ]
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        return []
-
-
-async def transcribe(pcm_s16le: bytes, start_sample: int = 0) -> Optional[dict]:
-    """
-    Async wrapper around _transcribe_sync.
-    pcm_s16le: raw s16le bytes at 16kHz mono.
-    start_sample: sample offset of this buffer within the session (for timing).
-    Returns {"text": str, "startMs": int, "endMs": int, "confidence": None} or None.
-    """
-    if not _model_loaded or len(pcm_s16le) < 2:
-        logger.warning(f"[asr] transcribe() early-exit: model_loaded={_model_loaded} pcm_len={len(pcm_s16le)}")
-        return None
-
-    duration_ms = len(pcm_s16le) / 32  # 32 bytes/ms at 16kHz mono s16le
-    logger.info(f"[asr] transcribe() called: pcm={len(pcm_s16le)}B ({duration_ms:.0f}ms audio)")
-
-    # Convert s16le → float32 in [-1, 1]
-    audio = np.frombuffer(pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
-
-    import time as _time
-    t0 = _time.monotonic()
-    loop = asyncio.get_event_loop()
-    segments = await loop.run_in_executor(_executor, _transcribe_sync, audio)
-    elapsed_ms = (_time.monotonic() - t0) * 1000
-
-    logger.info(f"[asr] whisper returned {len(segments)} segment(s) in {elapsed_ms:.1f}ms: {segments!r}")
-
-    if not segments:
-        logger.warning(f"[asr] transcribe() → None (empty segments for {duration_ms:.0f}ms of audio)")
-        return None
-
-    full_text = " ".join(s["text"] for s in segments).strip()
-    if not full_text:
-        logger.warning(f"[asr] transcribe() → None (segments non-empty but full_text is blank)")
-        return None
-
-    logger.info(f"[asr] transcribe() → text={full_text!r}")
-
-    # Convert centiseconds to ms, offset by start_sample
-    start_offset_ms = int(start_sample / SAMPLE_RATE * 1000)
-    first_t0_ms = segments[0]["t0"] * 10 + start_offset_ms
-    last_t1_ms = segments[-1]["t1"] * 10 + start_offset_ms
-
-    return {
-        "text": full_text,
-        "startMs": first_t0_ms,
-        "endMs": last_t1_ms,
-        "confidence": None,  # whisper.cpp doesn't expose per-segment confidence easily
-    }
+        return os.path.isfile(config.MODEL_PATH) and os.access(config.MODEL_PATH, os.R_OK)
+    except Exception:
+        return False

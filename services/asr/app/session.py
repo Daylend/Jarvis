@@ -9,7 +9,7 @@ import struct
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
-from app.stream import AudioStream
+from app.stream import StreamHandler
 from app import asr as asr_module
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class Session:
     def __init__(self, ws: WebSocket):
         self._ws = ws
-        self._streams: dict[int, AudioStream] = {}  # streamId -> AudioStream
+        self._streams: dict[int, StreamHandler] = {}  # streamId -> StreamHandler
         self._session_id: str = "unknown"
         self._guild_id: str = "unknown"
         self._channel_id: str = "unknown"
@@ -76,7 +76,7 @@ class Session:
                 logger.warning(f"[session {self._session_id}] Stream {stream_id} already open, ignoring.")
                 return
             logger.info(f"[session {self._session_id}] Opening stream {stream_id} for user {user_id}")
-            self._streams[stream_id] = AudioStream(
+            self._streams[stream_id] = StreamHandler(
                 stream_id=stream_id,
                 user_id=user_id,
                 send_cb=self._send_json,

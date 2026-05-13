@@ -17,6 +17,7 @@ const envSchema = z.object({
   VOICE_IDLE_TIMEOUT_SEC: z.coerce.number().default(900),
   TRIGGER_PHRASE: z.string().default('jarvis'),
   JARVIS_CONTEXT_SECONDS: z.coerce.number().default(180),
+  EARLY_JARVIS_PARTIALS: z.enum(['true', 'false']).default('false'),
 });
 
 const env = envSchema.parse(process.env);
@@ -34,4 +35,5 @@ export const config = {
   voiceIdleTimeoutSec: env.VOICE_IDLE_TIMEOUT_SEC,
   triggerPhrase: env.TRIGGER_PHRASE,
   jarvisContextSeconds: env.JARVIS_CONTEXT_SECONDS,
+  earlyJarvisPartials: env.EARLY_JARVIS_PARTIALS === 'true',
 };

@@ -1,21 +1,45 @@
 #!/bin/sh
-# Download the whisper-large-v3-turbo Q5_0 GGUF model if not already present.
-# The model is ~630 MB.
+# Idempotently download the Moonshine model and pin its path + arch into
+# /app/models/moonshine.env. Sourced by /app/entrypoint.sh.
 set -e
 
-MODEL_DIR="${MODEL_DIR:-/app/models}"
-MODEL_FILE="ggml-large-v3-turbo-q5_0.bin"
-MODEL_PATH="${MODEL_DIR}/${MODEL_FILE}"
-MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE}"
+MODEL_DIR="${MOONSHINE_MODEL_DIR:-/app/models}"
+LANG="${MOONSHINE_LANGUAGE:-en}"
+ENV_FILE="${MODEL_DIR}/moonshine.env"
 
 mkdir -p "$MODEL_DIR"
 
-if [ -f "$MODEL_PATH" ]; then
-  echo "[download-model] Model already present at ${MODEL_PATH}, skipping download."
-  exit 0
+# Fast path: already downloaded and pinned.
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  if [ -n "$MOONSHINE_MODEL_PATH" ] && [ -f "$MOONSHINE_MODEL_PATH" ]; then
+    echo "[download-model] Already pinned: arch=$MOONSHINE_MODEL_ARCH path=$MOONSHINE_MODEL_PATH"
+    exit 0
+  fi
 fi
 
-echo "[download-model] Downloading ${MODEL_FILE} from HuggingFace (~630 MB)..."
-curl -L --progress-bar -o "${MODEL_PATH}.tmp" "$MODEL_URL"
-mv "${MODEL_PATH}.tmp" "$MODEL_PATH"
-echo "[download-model] Model saved to ${MODEL_PATH}."
+echo "[download-model] Fetching Moonshine model (lang=$LANG) into $MODEL_DIR ..."
+
+# Point MOONSHINE_HOME at MODEL_DIR so the .ort artifacts live with our
+# persistent volume rather than ~/.cache.
+OUT="$(MOONSHINE_HOME="$MODEL_DIR" python -m moonshine_voice.download --language "$LANG" 2>&1)"
+echo "$OUT"
+
+# The downloader prints lines like:
+#   Model arch: 7
+#   Downloaded model path: /app/models/.../model.ort
+ARCH="$(printf '%s\n' "$OUT" | awk -F': *' '/^Model arch:/ {print $2; exit}')"
+MPATH="$(printf '%s\n' "$OUT" | awk -F': *' '/^Downloaded model path:/ {print $2; exit}')"
+
+if [ -z "$ARCH" ] || [ -z "$MPATH" ]; then
+  echo "[download-model] FAILED to parse downloader output (arch='$ARCH' path='$MPATH')" >&2
+  exit 1
+fi
+
+cat > "$ENV_FILE" <<EOF
+MOONSHINE_MODEL_PATH=$MPATH
+MOONSHINE_MODEL_ARCH=$ARCH
+MOONSHINE_LANGUAGE=$LANG
+EOF
+echo "[download-model] Pinned: arch=$ARCH path=$MPATH"

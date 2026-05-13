@@ -88,6 +88,37 @@ class ActionRouter {
       console.error('[jarvis] Handler error:', err);
     }
   }
+
+  /** Map of "streamId:lineId" we have already considered for an early Jarvis fire. */
+  private earlyJarvisSeen: Set<string> = new Set();
+
+  /**
+   * Optional pre-detection: when EARLY_JARVIS_PARTIALS is enabled, look at
+   * partials from the owner. If the trigger phrase is already present and a
+   * command tail of >= 2 words has accumulated, log an "early candidate".
+   * The actual handler dispatch still waits for the final to keep semantics
+   * simple in v1 — this method is wiring only.
+   */
+  noteEarlyJarvis(
+    _ctx: SessionContext,
+    msg: AsrMessage & { textNormalized: string; userId: string },
+  ): void {
+    if (!config.earlyJarvisPartials) return;
+    if (msg.userId !== config.ownerId) return;
+    if (msg.streamId === undefined || msg.lineId === undefined) return;
+
+    const key = `${msg.streamId}:${msg.lineId}`;
+    if (this.earlyJarvisSeen.has(key)) return;
+
+    const trigger = config.triggerPhrase.toLowerCase();
+    const idx = msg.textNormalized.toLowerCase().indexOf(trigger);
+    if (idx < 0) return;
+    const tail = msg.textNormalized.slice(idx + trigger.length).trim();
+    if (tail.split(/\s+/).filter(Boolean).length < 2) return;
+
+    this.earlyJarvisSeen.add(key);
+    console.log(`[jarvis] early candidate streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}"`);
+  }
 }
 
 export const actionRouter = new ActionRouter();

@@ -34,27 +34,20 @@ services:
       dockerfile: services/asr/Dockerfile
     restart: unless-stopped
     environment:
-      - MODEL_PATH=/app/models/ggml-large-v3-turbo-q5_0.bin
-      - DEVICE=vulkan
-      - VAD_THRESHOLD=0.5
-      - END_SILENCE_MS=700
-      - MAX_UTTERANCE_MS=25000
-      # Force whisper.cpp / ggml-vulkan to use GPU 0.
-      # Without this, ggml-vulkan may enumerate devices but not select one.
-      - GGML_VK_VISIBLE_DEVICES=0
+      - MOONSHINE_MODEL_DIR=/app/models
+      - MOONSHINE_LANGUAGE=en
+      - MOONSHINE_UPDATE_INTERVAL=0.25
+      - MOONSHINE_VAD_THRESHOLD=0.5
+      - MOONSHINE_VAD_WINDOW_DURATION=0.25
+      - MOONSHINE_VAD_MAX_SEGMENT_DURATION=10.0
+      - MOONSHINE_LOG_ORT_RUNS=true
+      - MOONSHINE_LOG_OUTPUT_TEXT=true
+      # Uncomment for bring-up debugging — saves every stream's PCM under /app/debug-wavs.
+      # - MOONSHINE_SAVE_INPUT_WAV_DIR=/app/debug-wavs
     volumes:
       - ../data/asr-models:/app/models
     ports:
       - "8765:8765"
-    # AMD GPU / Vulkan access via /dev/dri
-    # Requires both the 'video' group (display) and 'render' group (compute/Vulkan).
-    # On most Linux hosts the render group GID is 109 — adjust if `getent group render`
-    # shows a different value on your host.
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s

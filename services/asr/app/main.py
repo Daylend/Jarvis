@@ -23,10 +23,16 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the ASR model on startup."""
-    logger.info("Loading ASR model...")
-    asr_module._load_model()
-    logger.info("ASR model ready.")
+    """Validate that the configured Moonshine model is on disk.
+
+    Each /ws/transcribe stream lazily constructs its own Transcriber. ONNX
+    Runtime mmaps the .ort file so the per-stream cost is small.
+    """
+    info = asr_module.get_engine_info()
+    if not asr_module.is_loaded():
+        logger.error("[lifespan] Moonshine model not found or unreadable; check MOONSHINE_MODEL_PATH.")
+    else:
+        logger.info("[lifespan] ASR ready: engine=%s model=%s", info["engine"], info["model"])
     yield
     logger.info("Shutting down ASR sidecar.")
 

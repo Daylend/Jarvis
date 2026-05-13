@@ -17,6 +17,8 @@ interface SessionState {
   streamUsers: Map<number, string>;
   /** streamIds that are currently open (for reconnect replay) */
   openStreams: Map<number, string>; // streamId -> userId
+  /** streamId -> set of lineIds for which we already dispatched a `final`. Used to dedupe. */
+  finalsByStream: Map<number, Set<number>>;
 }
 
 const MAX_BUFFERED = 1_000_000; // 1 MB
@@ -39,6 +41,7 @@ class AsrClient {
       pingInterval: null,
       streamUsers: new Map(),
       openStreams: new Map(),
+      finalsByStream: new Map(),
     };
     this.sessions.set(ctx.id, state);
     this.connect(state);
@@ -70,6 +73,7 @@ class AsrClient {
     const state = this.sessions.get(ctx.id);
     if (!state) return;
     state.openStreams.delete(streamId);
+    state.finalsByStream.delete(streamId);
     this.sendJson(state, { type: 'close', streamId });
   }
 
@@ -112,7 +116,7 @@ class AsrClient {
         sampleRate: 16000,
         encoding: 's16le',
         channels: 1,
-        engineHint: 'whisper-turbo',
+        engineHint: 'moonshine',
       });
 
       // Re-open any streams that were active before reconnect
@@ -176,9 +180,17 @@ class AsrClient {
         console.log(`[asr-client] Sidecar ready — engine: ${msg.engine}, model: ${msg.model}, vulkan: ${msg.vulkan}`);
         break;
 
-      case 'partial':
+      case 'partial': {
+        const userId = msg.streamId !== undefined
+          ? state.streamUsers.get(msg.streamId)
+          : undefined;
+        if (userId && msg.text) {
+          const textNormalized = normalizer.apply(msg.text);
+          actionRouter.noteEarlyJarvis(state.ctx, { ...msg, textNormalized, userId });
+        }
         actionRouter.onPartial(state.ctx, msg);
         break;
+      }
 
       case 'final':
         this.handleFinal(state, msg).catch((err) =>
@@ -202,6 +214,20 @@ class AsrClient {
     if (msg.streamId === undefined || !msg.text) {
       console.warn(`[asr-client] handleFinal dropped — streamId=${msg.streamId} text=${JSON.stringify(msg.text)}`);
       return;
+    }
+
+    const lineId = msg.lineId;
+    if (lineId !== undefined) {
+      let seen = state.finalsByStream.get(msg.streamId);
+      if (!seen) {
+        seen = new Set();
+        state.finalsByStream.set(msg.streamId, seen);
+      }
+      if (seen.has(lineId)) {
+        console.log(`[asr-client] duplicate final dropped streamId=${msg.streamId} lineId=${lineId}`);
+        return;
+      }
+      seen.add(lineId);
     }
 
     const userId = state.streamUsers.get(msg.streamId);
