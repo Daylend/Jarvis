@@ -5,6 +5,7 @@ Handles the framing protocol: text JSON control messages + binary PCM with 4-byt
 import asyncio
 import json
 import logging
+import resource
 import struct
 from typing import Any
 
@@ -14,6 +15,8 @@ from app import asr as asr_module
 
 logger = logging.getLogger(__name__)
 
+MAX_STREAMS_PER_SESSION = 8
+
 
 class Session:
     def __init__(self, ws: WebSocket):
@@ -22,9 +25,11 @@ class Session:
         self._session_id: str = "unknown"
         self._guild_id: str = "unknown"
         self._channel_id: str = "unknown"
+        self._mem_log_task: asyncio.Task | None = None
 
     async def run(self) -> None:
         """Main receive loop for this WebSocket connection."""
+        self._mem_log_task = asyncio.create_task(self._log_memory_periodically())
         try:
             while True:
                 message = await self._ws.receive()
@@ -75,6 +80,20 @@ class Session:
             if stream_id in self._streams:
                 logger.warning(f"[session {self._session_id}] Stream {stream_id} already open, ignoring.")
                 return
+            # Safety net: refuse to open more than MAX_STREAMS_PER_SESSION
+            # Transcribers. With the one-stream-per-(session,userId) lifecycle
+            # change on the bot side this should never trigger in normal operation.
+            if len(self._streams) >= MAX_STREAMS_PER_SESSION:
+                logger.warning(
+                    "[session %s] refusing open stream=%s — at cap %d",
+                    self._session_id, stream_id, MAX_STREAMS_PER_SESSION,
+                )
+                await self._send_json({
+                    "type": "error",
+                    "streamId": stream_id,
+                    "message": f"max-streams-per-session ({MAX_STREAMS_PER_SESSION}) reached",
+                })
+                return
             logger.info(f"[session {self._session_id}] Opening stream {stream_id} for user {user_id}")
             self._streams[stream_id] = StreamHandler(
                 stream_id=stream_id,
@@ -89,6 +108,12 @@ class Session:
             stream = self._streams.pop(stream_id, None)
             if stream:
                 logger.info(f"[session {self._session_id}] Closing stream {stream_id}")
+                # Drain: let any in-flight emit coroutines (final, partial)
+                # scheduled via run_coroutine_threadsafe run before we stop
+                # the transcriber. Each sleep(0) yields the event loop once;
+                # 5 iterations is enough for a typical batch of callbacks.
+                for _ in range(5):
+                    await asyncio.sleep(0)
                 await stream.close()
 
         elif msg_type == "ping":
@@ -109,7 +134,7 @@ class Session:
         if stream is None:
             # Stream not yet opened or already closed — silently drop
             return
-        logger.info(f"[session {self._session_id}] binary frame: stream={stream_id} pcm={len(pcm)}B")
+        logger.debug(f"[session {self._session_id}] binary frame: stream={stream_id} pcm={len(pcm)}B")
         # push_pcm is synchronous (VAD is fast); schedule any async tasks it creates
         stream.push_pcm(pcm)
 
@@ -124,8 +149,28 @@ class Session:
 
     async def _cleanup(self) -> None:
         """Close all open streams on disconnect."""
+        if self._mem_log_task is not None:
+            self._mem_log_task.cancel()
+            self._mem_log_task = None
         logger.info(f"[session {self._session_id}] Cleaning up {len(self._streams)} stream(s).")
         tasks = [stream.close() for stream in self._streams.values()]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._streams.clear()
+
+    async def _log_memory_periodically(self) -> None:
+        """Log stream count and RSS every 60 s while the session is alive."""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                usage = resource.getrusage(resource.RUSAGE_SELF)
+                # ru_maxrss is KB on Linux.
+                rss_mb = usage.ru_maxrss / 1024.0
+                logger.info(
+                    "[session %s] alive streams=%d rss_max_mb=%.1f",
+                    self._session_id, len(self._streams), rss_mb,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("[session %s] mem log error: %s", self._session_id, e)

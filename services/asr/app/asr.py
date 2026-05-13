@@ -9,6 +9,7 @@ touch the WebSocket from a non-loop thread.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import os
 import time
@@ -22,6 +23,8 @@ from app import config
 logger = logging.getLogger(__name__)
 
 EmitCb = Callable[[dict], Awaitable[None]]
+
+_MAX_PARTIAL_SEEN = 256
 
 
 class _Bridge(TranscriptEventListener):
@@ -41,10 +44,20 @@ class _Bridge(TranscriptEventListener):
         # Shape: {"t": float | None, "last_pcm": float | None, "first_partial_seen": set[int]}
         self._ts = timestamps
 
+    def detach(self) -> None:
+        """Null out loop + emit refs so late callbacks become no-ops and the
+        WS event loop is eligible for garbage collection. Call before del."""
+        self._loop = None  # type: ignore[assignment]
+        self._emit = None  # type: ignore[assignment]
+
     def _push(self, payload: dict) -> None:
         # Schedule on the WS event loop; this method runs on a Moonshine thread.
+        loop = self._loop
+        emit = self._emit
+        if loop is None or emit is None:
+            return
         try:
-            asyncio.run_coroutine_threadsafe(self._emit(payload), self._loop)
+            asyncio.run_coroutine_threadsafe(emit(payload), loop)
         except RuntimeError as e:
             # Loop may have shut down during teardown; log once and drop.
             logger.warning("[asr stream=%d] could not schedule emit: %s", self._stream_id, e)
@@ -53,8 +66,14 @@ class _Bridge(TranscriptEventListener):
     def on_line_text_changed(self, event):  # type: ignore[override]
         line = event.line
         line_id = int(line.line_id)
-        if line_id not in self._ts["first_partial_seen"]:
-            self._ts["first_partial_seen"].add(line_id)
+        seen: set = self._ts["first_partial_seen"]
+        if line_id not in seen:
+            # Bound the set so it doesn't grow unboundedly across a long-running
+            # Manual-mode stream. Pop an arbitrary element when full — any line
+            # still actively producing partials will be re-added on its next event.
+            if len(seen) >= _MAX_PARTIAL_SEEN:
+                seen.pop()
+            seen.add(line_id)
             t_first = self._ts.get("t")
             if t_first is not None:
                 latency_ms = (time.monotonic() - t_first) * 1000.0
@@ -106,6 +125,7 @@ def build_transcriber(
         "identify_speakers": "false",
         "vad_threshold": str(config.VAD_THRESHOLD),
         "vad_window_duration": str(config.VAD_WINDOW_DURATION),
+        "vad_look_behind_sample_count": str(config.VAD_LOOK_BEHIND_SAMPLES),
         "vad_max_segment_duration": str(config.VAD_MAX_SEGMENT),
         "log_output_text": "true" if config.LOG_OUTPUT_TEXT else "false",
     }
@@ -122,7 +142,12 @@ def build_transcriber(
         update_interval=config.UPDATE_INTERVAL,
         options=options,
     )
-    transcriber.add_listener(_Bridge(loop, emit, stream_id, timestamps))
+    bridge = _Bridge(loop, emit, stream_id, timestamps)
+    transcriber.add_listener(bridge)
+    # Stash the bridge on the transcriber so shutdown_transcriber can detach it
+    # before dropping references. This breaks the ref cycle that keeps ORT
+    # InferenceSession native arenas alive.
+    transcriber._paxfax_bridge = bridge  # type: ignore[attr-defined]
     transcriber.start()
     logger.info(
         "[asr] Transcriber started stream=%d update_interval=%.3fs vad_window=%.3fs vad_max_segment=%.1fs",
@@ -142,8 +167,31 @@ def feed_pcm_s16le(transcriber: Transcriber, pcm_s16le: bytes) -> None:
 
 
 async def shutdown_transcriber(transcriber: Transcriber) -> None:
-    """stop() may block on internal threads; run in a worker thread."""
+    """Stop the transcriber, detach the listener bridge, and force a GC pass
+    so ONNX Runtime InferenceSession native destructors run promptly, releasing
+    arena memory back to the allocator. Without this, RSS climbs monotonically
+    across stream lifecycles."""
     await asyncio.to_thread(transcriber.stop)
+
+    # Detach the listener bridge so any late thread callbacks become no-ops
+    # and the WS event loop can be garbage-collected with the session.
+    bridge = getattr(transcriber, "_paxfax_bridge", None)
+    if bridge is not None:
+        try:
+            bridge.detach()
+        except Exception:
+            pass
+        try:
+            transcriber._paxfax_bridge = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    # Drop the transcriber wrapper and force GC so ORT C++ destructors fire.
+    try:
+        del transcriber
+    except Exception:
+        pass
+    gc.collect()
 
 
 def get_engine_info() -> dict:

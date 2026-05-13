@@ -109,14 +109,25 @@ class PerUserReceiver {
     if (!map) return;
     if (map.has(userId)) return; // already subscribed for this user
 
+    // Reserve the slot synchronously to defeat the same-tick
+    // `speaking.on('start')` double-fire race. The real ActiveStream
+    // overwrites this placeholder a few lines down.
+    const placeholder: ActiveStream = {
+      streamId: -1,
+      userId,
+      startedAt: performance.now(),
+      cleanup: () => {},
+    };
+    map.set(userId, placeholder);
+
     const streamId = this.nextStreamId++;
 
-    // Subscribe to the user's Opus stream; end after 800ms of silence
+    // Manual end behavior: one stream per (session, userId) for the
+    // entire voice session. Moonshine's internal VAD owns line/segment
+    // boundaries — we do NOT chop streams on silence gaps. The stream
+    // closes only on explicit detach, user-leave, or unrecoverable error.
     const opusStream = ctx.connection.receiver.subscribe(userId, {
-      end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: 800,
-      },
+      end: { behavior: EndBehaviorType.Manual },
     });
 
     // Decode Opus (48kHz stereo) and resample to 16kHz mono s16le in one step.
@@ -131,6 +142,23 @@ class PerUserReceiver {
     opusStream.pipe(converter);
 
     let pcmChunks = 0;
+    let closed = false;
+
+    const cleanup = (reason: string) => {
+      if (closed) return;
+      closed = true;
+      console.log(`[receiver] [stream ${streamId}] cleanup (${reason}) pcmChunks=${pcmChunks}`);
+      asrClient.closeStream(ctx, streamId);
+      try { opusStream.destroy(); } catch { /* ignore */ }
+      try { converter.destroy(); } catch { /* ignore */ }
+      // Only delete if the map entry still points to *this* stream (it may
+      // have been overwritten by a new stream created after a rapid
+      // disconnect/rejoin cycle).
+      if (map.get(userId)?.streamId === streamId) {
+        map.delete(userId);
+      }
+    };
+
     converter.on('data', (chunk: Buffer) => {
       pcmChunks++;
       if (pcmChunks <= 3) {
@@ -140,37 +168,35 @@ class PerUserReceiver {
       asrClient.sendPcm(ctx, streamId, chunk);
     });
 
-    converter.on('end', () => {
-      console.log(`[receiver] [stream ${streamId}] converter ended — pcmChunks=${pcmChunks}`);
-    });
-
     converter.on('error', (err: Error) => {
-      console.error(`[receiver] converter error for stream ${streamId}:`, err.message);
-      cleanup();
+      console.error(`[receiver] converter error stream=${streamId}:`, err.message);
+      cleanup('converter-error');
     });
 
-    const cleanup = () => {
-      asrClient.closeStream(ctx, streamId);
-      try { opusStream.destroy(); } catch { /* ignore */ }
-      try { converter.destroy(); } catch { /* ignore */ }
-      map.delete(userId);
-    };
-
-    opusStream.on('end', cleanup);
+    // Manual end: opus 'end' fires only when *we* destroy it. Treat as safety net.
+    opusStream.on('end', () => cleanup('opus-end'));
     opusStream.on('error', (err: Error) => {
-      console.error(`[receiver] Opus stream error for user ${userId}:`, err.message);
-      cleanup();
+      console.error(`[receiver] opus error user=${userId}:`, err.message);
+      cleanup('opus-error');
     });
 
     const activeStream: ActiveStream = {
       streamId,
       userId,
       startedAt: performance.now(),
-      cleanup,
+      cleanup: () => cleanup('detach'),
     };
-
     map.set(userId, activeStream);
-    console.log(`[receiver] Opened stream ${streamId} for user ${userId} in session ${ctx.id}`);
+
+    console.log(`[receiver] Opened stream ${streamId} for user ${userId} session=${ctx.id}`);
+  }
+
+  /** Close one user's stream (e.g. on VoiceStateUpdate disconnect). No-op if absent. */
+  closeUser(ctx: SessionContext, userId: string): void {
+    const map = this.active.get(ctx.id);
+    const stream = map?.get(userId);
+    if (!stream) return;
+    stream.cleanup();
   }
 }
 

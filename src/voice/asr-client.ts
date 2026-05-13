@@ -25,8 +25,12 @@ const MAX_BUFFERED = 1_000_000; // 1 MB
 const PING_INTERVAL_MS = 15_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+let opensTotal = 0;
+let closesTotal = 0;
+
 class AsrClient {
-  private sessions = new Map<string, SessionState>();
+  // Exposed so the module-scoped periodic logger can read it.
+  readonly sessions = new Map<string, SessionState>();
 
   // ─── Session lifecycle ────────────────────────────────────────────────────
 
@@ -66,6 +70,7 @@ class AsrClient {
     if (!state) return;
     state.streamUsers.set(streamId, userId);
     state.openStreams.set(streamId, userId);
+    opensTotal++;
     this.sendJson(state, { type: 'open', streamId, userId });
   }
 
@@ -74,6 +79,8 @@ class AsrClient {
     if (!state) return;
     state.openStreams.delete(streamId);
     state.finalsByStream.delete(streamId);
+    state.streamUsers.delete(streamId);
+    closesTotal++;
     this.sendJson(state, { type: 'close', streamId });
   }
 
@@ -273,3 +280,13 @@ class AsrClient {
 }
 
 export const asrClient = new AsrClient();
+
+// Periodic observability: log stream counts once a minute while sessions are active.
+setInterval(() => {
+  const entries = [...asrClient.sessions.entries()];
+  if (entries.length === 0 && opensTotal === 0 && closesTotal === 0) return;
+  const sessionLines = entries
+    .map(([id, st]) => `${id.slice(0, 8)}:streams=${st.openStreams.size}`)
+    .join(' ');
+  console.log(`[asr-client] alive opens=${opensTotal} closes=${closesTotal} sessions=[${sessionLines}]`);
+}, 60_000).unref();

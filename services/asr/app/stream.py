@@ -48,3 +48,4 @@ class StreamHandler:
     async def close(self) -> None:
         logger.info("[stream %d] closing", self.stream_id)
         await asr_module.shutdown_transcriber(self._transcriber)
+        self._transcriber = None  # type: ignore[assignment]

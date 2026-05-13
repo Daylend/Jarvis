@@ -89,8 +89,23 @@ class ActionRouter {
     }
   }
 
-  /** Map of "streamId:lineId" we have already considered for an early Jarvis fire. */
+  private static readonly EARLY_JARVIS_MAX = 1024;
+
+  /** Map of "streamId:lineId" we have already considered for an early Jarvis fire.
+   *  Bounded to EARLY_JARVIS_MAX entries via FIFO eviction to prevent unbounded growth
+   *  across long-running sessions. */
   private earlyJarvisSeen: Set<string> = new Set();
+  private earlyJarvisOrder: string[] = [];
+
+  private rememberEarlyJarvis(key: string): void {
+    if (this.earlyJarvisSeen.has(key)) return;
+    this.earlyJarvisSeen.add(key);
+    this.earlyJarvisOrder.push(key);
+    while (this.earlyJarvisOrder.length > ActionRouter.EARLY_JARVIS_MAX) {
+      const oldest = this.earlyJarvisOrder.shift()!;
+      this.earlyJarvisSeen.delete(oldest);
+    }
+  }
 
   /**
    * Optional pre-detection: when EARLY_JARVIS_PARTIALS is enabled, look at
@@ -116,7 +131,7 @@ class ActionRouter {
     const tail = msg.textNormalized.slice(idx + trigger.length).trim();
     if (tail.split(/\s+/).filter(Boolean).length < 2) return;
 
-    this.earlyJarvisSeen.add(key);
+    this.rememberEarlyJarvis(key);
     console.log(`[jarvis] early candidate streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}"`);
   }
 }
