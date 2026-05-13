@@ -17,8 +17,10 @@ interface SessionState {
   streamUsers: Map<number, string>;
   /** streamIds that are currently open (for reconnect replay) */
   openStreams: Map<number, string>; // streamId -> userId
-  /** streamId -> set of lineIds for which we already dispatched a `final`. Used to dedupe. */
-  finalsByStream: Map<number, Set<number>>;
+  /** streamId -> set of "lineId:endMs" keys for which we already dispatched a `final`. Used to dedupe.
+   *  Key is a composite of lineId+endMs because Moonshine may reuse lineId across utterances within
+   *  a single long-lived Manual stream; endMs disambiguates. */
+  finalsByStream: Map<number, Set<string>>;
 }
 
 const MAX_BUFFERED = 1_000_000; // 1 MB
@@ -225,16 +227,17 @@ class AsrClient {
 
     const lineId = msg.lineId;
     if (lineId !== undefined) {
+      const dedupKey = `${lineId}:${msg.endMs ?? 0}`;
       let seen = state.finalsByStream.get(msg.streamId);
       if (!seen) {
         seen = new Set();
         state.finalsByStream.set(msg.streamId, seen);
       }
-      if (seen.has(lineId)) {
-        console.log(`[asr-client] duplicate final dropped streamId=${msg.streamId} lineId=${lineId}`);
+      if (seen.has(dedupKey)) {
+        console.log(`[asr-client] duplicate final dropped streamId=${msg.streamId} lineId=${lineId} endMs=${msg.endMs ?? 0}`);
         return;
       }
-      seen.add(lineId);
+      seen.add(dedupKey);
     }
 
     const userId = state.streamUsers.get(msg.streamId);
