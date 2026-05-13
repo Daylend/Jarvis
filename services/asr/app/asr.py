@@ -15,7 +15,7 @@ import time
 from typing import Awaitable, Callable
 
 import numpy as np
-from moonshine_voice import Transcriber, TranscriptEventListener
+from moonshine_voice import Transcriber, TranscriptEventListener, ModelArch
 
 from app import config
 
@@ -107,7 +107,6 @@ def build_transcriber(
         "vad_threshold": str(config.VAD_THRESHOLD),
         "vad_window_duration": str(config.VAD_WINDOW_DURATION),
         "vad_max_segment_duration": str(config.VAD_MAX_SEGMENT),
-        "log_ort_runs": "true" if config.LOG_ORT_RUNS else "false",
         "log_output_text": "true" if config.LOG_OUTPUT_TEXT else "false",
     }
 
@@ -119,7 +118,7 @@ def build_transcriber(
 
     transcriber = Transcriber(
         model_path=config.MODEL_PATH,
-        model_arch=config.MODEL_ARCH,
+        model_arch=ModelArch(config.MODEL_ARCH),
         update_interval=config.UPDATE_INTERVAL,
         options=options,
     )
@@ -156,9 +155,12 @@ def get_engine_info() -> dict:
 
 
 def is_loaded() -> bool:
-    """We don't keep a global model anymore; healthz returns ready as soon as
-    the configured model file exists and is readable."""
+    """Checks the configured MODEL_PATH, which may be a single .ort file or a
+    directory containing .ort component files."""
     try:
-        return os.path.isfile(config.MODEL_PATH) and os.access(config.MODEL_PATH, os.R_OK)
+        p = config.MODEL_PATH
+        if os.path.isdir(p):
+            return any(f.endswith('.ort') for f in os.listdir(p))
+        return os.path.isfile(p) and os.access(p, os.R_OK)
     except Exception:
         return False
