@@ -25,8 +25,8 @@ MODEL_LANG: str = os.environ.get("MOONSHINE_LANGUAGE", "en")
 UPDATE_INTERVAL: float = float(os.environ.get("MOONSHINE_UPDATE_INTERVAL", "0.25"))
 
 # --- VAD knobs ---
-VAD_THRESHOLD: float = float(os.environ.get("MOONSHINE_VAD_THRESHOLD", "0.5"))
-VAD_WINDOW_DURATION: float = float(os.environ.get("MOONSHINE_VAD_WINDOW_DURATION", "0.25"))
+VAD_THRESHOLD: float = float(os.environ.get("MOONSHINE_VAD_THRESHOLD", "0.3"))
+VAD_WINDOW_DURATION: float = float(os.environ.get("MOONSHINE_VAD_WINDOW_DURATION", "0.5"))
 VAD_MAX_SEGMENT: float = float(os.environ.get("MOONSHINE_VAD_MAX_SEGMENT_DURATION", "10.0"))
 
 # --- Diagnostics ---
