@@ -21,11 +21,50 @@ interface SessionState {
    *  Key is a composite of lineId+endMs because Moonshine may reuse lineId across utterances within
    *  a single long-lived Manual stream; endMs disambiguates. */
   finalsByStream: Map<number, Set<string>>;
+  /** streamId -> last final text (original, untrimmed), used to trim cross-segment overlap */
+  lastFinalText: Map<number, string>;
 }
 
 const MAX_BUFFERED = 1_000_000; // 1 MB
 const PING_INTERVAL_MS = 15_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
+
+/** Minimum number of words that must match for overlap trimming.
+ *  Prevents false positives on common short phrases like "the" or "I". */
+const MIN_OVERLAP_WORDS = 3;
+
+/**
+ * If the tail of `prev` overlaps with the head of `current`, return `current`
+ * with the overlapping prefix stripped. Uses a case-insensitive suffix/prefix word match.
+ *
+ * Example:
+ *   prev    = "are in these fights right now."
+ *   current = "these fights right now. Having a double"
+ *   result  = "Having a double"
+ *
+ * Only considers overlaps of >= MIN_OVERLAP_WORDS words to avoid false positives
+ * on common short phrases like "the" or "I".
+ */
+function trimOverlap(prev: string, current: string): string {
+  const prevWords = prev.split(/\s+/);
+  const currentWords = current.split(/\s+/);
+
+  const maxCheck = Math.min(prevWords.length, currentWords.length);
+
+  for (let overlapLen = maxCheck; overlapLen >= MIN_OVERLAP_WORDS; overlapLen--) {
+    const prevSuffix = prevWords.slice(-overlapLen).join(' ').toLowerCase();
+    const currentPrefix = currentWords.slice(0, overlapLen).join(' ').toLowerCase();
+
+    if (prevSuffix === currentPrefix) {
+      const trimmed = currentWords.slice(overlapLen).join(' ');
+      // If trimming would empty the string entirely, keep the original
+      // (this can happen if the new final is entirely contained in the old one).
+      return trimmed || current;
+    }
+  }
+
+  return current; // No overlap found
+}
 
 let opensTotal = 0;
 let closesTotal = 0;
@@ -48,6 +87,7 @@ class AsrClient {
       streamUsers: new Map(),
       openStreams: new Map(),
       finalsByStream: new Map(),
+      lastFinalText: new Map(),
     };
     this.sessions.set(ctx.id, state);
     this.connect(state);
@@ -81,6 +121,7 @@ class AsrClient {
     if (!state) return;
     state.openStreams.delete(streamId);
     state.finalsByStream.delete(streamId);
+    state.lastFinalText.delete(streamId);
     state.streamUsers.delete(streamId);
     closesTotal++;
     this.sendJson(state, { type: 'close', streamId });
@@ -146,7 +187,10 @@ class AsrClient {
       if (isBinary) return; // server should not send binary
       try {
         const msg: AsrMessage = JSON.parse(data.toString());
-        console.log('[asr-client] incoming message:', JSON.stringify(msg));
+        // Log everything except high-frequency partials to keep console noise manageable
+        if (msg.type !== 'partial') {
+          console.log('[asr-client] incoming message:', JSON.stringify(msg));
+        }
         this.handleMessage(state, msg);
       } catch (err) {
         console.error('[asr-client] Failed to parse message:', err);
@@ -246,14 +290,32 @@ class AsrClient {
       return;
     }
 
-    const textNormalized = normalizer.apply(msg.text);
+    // --- Cross-segment overlap trimming ---
+    // Moonshine's VAD look-behind buffer can cause the start of a new segment
+    // to include text that was already transcribed at the end of the previous
+    // segment. Trim any overlapping prefix from the current final's text.
+    const prevText = state.lastFinalText.get(msg.streamId);
+    let textForNormalization = msg.text;
+    if (prevText) {
+      const trimmed = trimOverlap(prevText, msg.text);
+      if (trimmed !== msg.text) {
+        const removedWords = msg.text.split(/\s+/).length - trimmed.split(/\s+/).length;
+        console.log(`[asr-client] overlap trimmed: removed ${removedWords} words from head of final streamId=${msg.streamId}`);
+        textForNormalization = trimmed;
+      }
+    }
+    // Store the ORIGINAL (untrimmed) text for the next comparison — overlap
+    // detection must check against what Moonshine actually produced, not what we trimmed.
+    state.lastFinalText.set(msg.streamId, msg.text);
 
-    const replacements = msg.text !== textNormalized
-      ? ` (${(msg.text.split(' ').length - textNormalized.split(' ').length)} replacements)`
+    const textNormalized = normalizer.apply(textForNormalization);
+
+    const replacements = textForNormalization !== textNormalized
+      ? ` (${(textForNormalization.split(' ').length - textNormalized.split(' ').length)} replacements)`
       : '';
     // Primary transcript log — "User: hello world"
     console.log(`[transcript] User ${userId}: ${textNormalized}${replacements}`);
-    console.log(`[asr] [${userId}] raw="${msg.text}"${replacements}`);
+    console.log(`[asr] [${userId}] raw="${textForNormalization}"${replacements}`);
 
     const row = {
       sessionId: state.ctx.id,
@@ -262,7 +324,7 @@ class AsrClient {
       userId,
       startMs: msg.startMs ?? 0,
       endMs: msg.endMs ?? 0,
-      textRaw: msg.text,
+      textRaw: textForNormalization,
       textNormalized,
       confidence: msg.confidence ?? null,
     };
