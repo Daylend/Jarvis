@@ -211,6 +211,13 @@ def feed_pcm_to_stream(stream: object, pcm_s16le: bytes) -> None:
     stream.add_audio(audio, config.SAMPLE_RATE)
 
 
+def feed_silence_to_stream(stream: object, duration_ms: int) -> None:
+    """Inject zero-valued float32 audio to trigger VAD endpoint detection."""
+    n_samples = int(config.SAMPLE_RATE * duration_ms / 1000)
+    silence = np.zeros(n_samples, dtype=np.float32)
+    stream.add_audio(silence, config.SAMPLE_RATE)
+
+
 async def shutdown_stream(stream: object) -> None:
     """Stop one user's stream and detach its listener bridge.
 

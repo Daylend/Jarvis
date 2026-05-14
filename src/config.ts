@@ -18,7 +18,7 @@ const envSchema = z.object({
   TRIGGER_PHRASE: z.string().default('jarvis'),
   JARVIS_CONTEXT_SECONDS: z.coerce.number().default(180),
   EARLY_JARVIS_PARTIALS: z.enum(['true', 'false']).default('true'),
-  EARLY_JARVIS_STABLE_COUNT: z.coerce.number().int().min(1).default(2),
+  EARLY_JARVIS_CUTOFF_MS: z.coerce.number().int().min(0).default(2000),
 });
 
 const env = envSchema.parse(process.env);
@@ -37,5 +37,5 @@ export const config = {
   triggerPhrase: env.TRIGGER_PHRASE,
   jarvisContextSeconds: env.JARVIS_CONTEXT_SECONDS,
   earlyJarvisPartials: env.EARLY_JARVIS_PARTIALS === 'true',
-  earlyJarvisStableCount: env.EARLY_JARVIS_STABLE_COUNT,
+  earlyJarvisCutoffMs: env.EARLY_JARVIS_CUTOFF_MS,
 };

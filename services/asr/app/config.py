@@ -22,13 +22,19 @@ MODEL_ARCH: int = int(os.environ["MOONSHINE_MODEL_ARCH"])
 MODEL_LANG: str = os.environ.get("MOONSHINE_LANGUAGE", "en")
 
 # --- Streaming knobs ---
-UPDATE_INTERVAL: float = float(os.environ.get("MOONSHINE_UPDATE_INTERVAL", "0.25"))
+UPDATE_INTERVAL: float = float(os.environ.get("MOONSHINE_UPDATE_INTERVAL", "0.15"))
 
 # --- VAD knobs ---
-VAD_THRESHOLD: float = float(os.environ.get("MOONSHINE_VAD_THRESHOLD", "0.2"))
-VAD_WINDOW_DURATION: float = float(os.environ.get("MOONSHINE_VAD_WINDOW_DURATION", "0.5"))
-VAD_LOOK_BEHIND_SAMPLES: int = int(os.environ.get("MOONSHINE_VAD_LOOK_BEHIND_SAMPLES", "16384"))
-VAD_MAX_SEGMENT: float = float(os.environ.get("MOONSHINE_VAD_MAX_SEGMENT_DURATION", "10.0"))
+VAD_THRESHOLD: float = float(os.environ.get("MOONSHINE_VAD_THRESHOLD", "0.3"))
+VAD_WINDOW_DURATION: float = float(os.environ.get("MOONSHINE_VAD_WINDOW_DURATION", "0.3"))
+VAD_LOOK_BEHIND_SAMPLES: int = int(os.environ.get("MOONSHINE_VAD_LOOK_BEHIND_SAMPLES", "8192"))
+VAD_MAX_SEGMENT: float = float(os.environ.get("MOONSHINE_VAD_MAX_SEGMENT_DURATION", "6.0"))
+
+# --- Endpoint flush (silence injection) ---
+ENDPOINT_IDLE_MS: int = int(os.environ.get("ASR_ENDPOINT_IDLE_MS", "350"))
+ENDPOINT_SILENCE_MS: int = int(os.environ.get("ASR_ENDPOINT_SILENCE_MS", "500"))
+ENDPOINT_FORCE_UPDATES: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATES", "3"))
+ENDPOINT_FORCE_UPDATE_INTERVAL_MS: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATE_INTERVAL_MS", "150"))
 
 # --- Diagnostics ---
 LOG_ORT_RUNS: bool = _bool("MOONSHINE_LOG_ORT_RUNS", True)

@@ -19,8 +19,9 @@ from app import asr as asr_module
 
 logger = logging.getLogger(__name__)
 
-# Sentinel value pushed into the queue to signal the feeder thread to exit.
-_STOP = object()
+# Sentinel values pushed into the queue.
+_STOP = object()   # signal the feeder thread to exit
+_SILENCE = object()  # inject zero audio for VAD endpoint flush
 
 
 class StreamHandler:
@@ -42,6 +43,11 @@ class StreamHandler:
             timestamps=self._timestamps,
         )
 
+        # Endpoint flush watchdog state — all mutated only from the watchdog thread.
+        self._flush_state: str = "idle"  # idle | flushing | done
+        self._flush_count = 0
+        self._last_flush_at: float = 0.0
+
         # Unbounded queue — the bot sends ~50 chunks/s per user at 16 kHz;
         # each chunk is tiny (~640 B). Even if inference lags, memory is fine.
         self._pcm_queue: queue.Queue[bytes | object] = queue.Queue()
@@ -52,6 +58,14 @@ class StreamHandler:
         )
         self._feeder.start()
 
+        self._watchdog_stop = threading.Event()
+        self._watchdog = threading.Thread(
+            target=self._watchdog_loop,
+            name=f"flush-watchdog-{stream_id}",
+            daemon=True,
+        )
+        self._watchdog.start()
+
     # Called from the asyncio event loop — must not block.
     def push_pcm(self, pcm_s16le: bytes) -> None:
         if not pcm_s16le:
@@ -60,6 +74,7 @@ class StreamHandler:
         if self._timestamps["t"] is None:
             self._timestamps["t"] = now
         self._timestamps["last_pcm"] = now
+        self._flush_state = "idle"  # reset idle detection on new real audio
         self._pcm_queue.put_nowait(pcm_s16le)
 
     def _feed_loop(self) -> None:
@@ -74,12 +89,70 @@ class StreamHandler:
             if item is _STOP:
                 break
             try:
-                asr_module.feed_pcm_to_stream(self._stream, item)
+                if isinstance(item, tuple) and item[0] is _SILENCE:
+                    asr_module.feed_silence_to_stream(self._stream, item[1])
+                else:
+                    asr_module.feed_pcm_to_stream(self._stream, item)
             except Exception:
-                logger.exception("[stream %d] feed_pcm_s16le error", self.stream_id)
+                logger.exception("[stream %d] feed error", self.stream_id)
+
+    def _watchdog_loop(self) -> None:
+        """Periodically check for audio idle and inject silence to force VAD endpoint.
+
+        Runs on its own daemon thread. When no PCM has arrived for
+        ENDPOINT_IDLE_MS, injects trailing silence so Moonshine's VAD can
+        detect the speech endpoint and emit the final.
+        """
+        poll_interval = 0.05  # 50 ms
+        idle_ms = asr_module.config.ENDPOINT_IDLE_MS
+        silence_ms = asr_module.config.ENDPOINT_SILENCE_MS
+        max_updates = asr_module.config.ENDPOINT_FORCE_UPDATES
+        update_interval_ms = asr_module.config.ENDPOINT_FORCE_UPDATE_INTERVAL_MS
+
+        while not self._watchdog_stop.wait(poll_interval):
+            last_pcm = self._timestamps.get("last_pcm")
+            if last_pcm is None:
+                continue
+
+            now = time.monotonic()
+            elapsed_ms = (now - last_pcm) * 1000.0
+
+            if self._flush_state == "idle" and elapsed_ms >= idle_ms:
+                # First flush: inject silence to cross update_interval threshold
+                logger.info(
+                    "[stream %d] endpoint flush start: idle=%.0fms injecting %dms silence",
+                    self.stream_id, elapsed_ms, silence_ms,
+                )
+                self._pcm_queue.put_nowait((_SILENCE, silence_ms))
+                self._flush_state = "flushing"
+                self._flush_count = 1
+                self._last_flush_at = now
+
+            elif self._flush_state == "flushing":
+                if self._flush_count >= max_updates:
+                    self._flush_state = "done"
+                    logger.info(
+                        "[stream %d] endpoint flush done after %d injections",
+                        self.stream_id, self._flush_count,
+                    )
+                    continue
+                if (now - self._last_flush_at) * 1000.0 >= update_interval_ms:
+                    # Follow-up: smaller silence chunk to trigger another update
+                    self._pcm_queue.put_nowait((_SILENCE, update_interval_ms))
+                    self._flush_count += 1
+                    self._last_flush_at = now
+                    logger.debug(
+                        "[stream %d] endpoint flush injection %d/%d",
+                        self.stream_id, self._flush_count, max_updates,
+                    )
 
     async def close(self) -> None:
         logger.info("[stream %d] closing (queue depth=%d)", self.stream_id, self._pcm_queue.qsize())
+        # Stop the watchdog thread first.
+        self._watchdog_stop.set()
+        await asyncio.to_thread(self._watchdog.join, 5.0)
+        if self._watchdog.is_alive():
+            logger.warning("[stream %d] watchdog thread did not exit in time", self.stream_id)
         # Signal the feeder thread to exit and wait for it (off the event loop).
         self._pcm_queue.put_nowait(_STOP)
         await asyncio.to_thread(self._feeder.join, 5.0)

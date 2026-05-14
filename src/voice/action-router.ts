@@ -50,10 +50,12 @@ class ActionRouter {
   ): Promise<void> {
     if (msg.userId !== config.ownerId) return;
 
-    // If we already dispatched this utterance from a stable partial, the
-    // final is just a correction — log it and skip.
+    // If we already dispatched this utterance from an early partial or timer,
+    // the final is just a correction — log it and skip.
     if (msg.streamId !== undefined && msg.lineId !== undefined) {
       const key = `${msg.streamId}:${msg.lineId}`;
+      // Cancel any still-running early-dispatch timer.
+      this.cancelEarlyTimer(key);
       if (this.dispatchedKeys.has(key)) {
         const finalText = msg.textNormalized ?? '';
         const dispatchedText = this.dispatchedTexts.get(key) ?? '';
@@ -62,7 +64,6 @@ class ActionRouter {
         } else {
           console.log(`[jarvis] final for already-dispatched utterance lineId=${msg.lineId} — skipping`);
         }
-        this.partialTextByKey.delete(key);
         this.dispatchedKeys.delete(key);
         this.dispatchedTexts.delete(key);
         return;
@@ -119,10 +120,16 @@ class ActionRouter {
 
   private static readonly PARTIAL_TRACKING_MAX = 1024;
 
-  /** Maps "streamId:lineId" to partial command text and the number of
-   *  consecutive partials where that text has remained stable. */
-  private partialTextByKey = new Map<string, { text: string; stableCount: number }>();
-  /** FIFO key order for bounded eviction of partialTextByKey. */
+  /** Maps "streamId:lineId" to a running early-dispatch timer and the latest
+   *  command tail text. On first partial with trigger+tail, a real setTimeout
+   *  is started; subsequent partials update the tail; the timer fires with
+   *  whatever tail is current when the cutoff is reached. */
+  private partialFirstSeen = new Map<string, {
+    firstSeenAt: number;
+    latestTail: string;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  /** FIFO key order for bounded eviction of partialFirstSeen. */
   private partialKeyOrder: string[] = [];
   /** Keys we've already dispatched from a partial — prevents double-fires. */
   private dispatchedKeys = new Set<string>();
@@ -130,10 +137,11 @@ class ActionRouter {
   private dispatchedTexts = new Map<string, string>();
 
   /**
-   * Called for every partial from the owner. If the trigger phrase is present
-   * and the command tail (words after trigger) stabilises across
-   * config.earlyJarvisStableCount consecutive partials, fire the Jarvis
-   * handler immediately instead of waiting for the final.
+   * Called for every partial from the owner. On the first partial containing
+   * the trigger phrase + ≥2 command words, starts a real setTimeout for
+   * config.earlyJarvisCutoffMs. Subsequent partials update the latest tail
+   * text. When the timer fires (or the final arrives first), dispatches the
+   * Jarvis handler with the best text available at that moment.
    */
   noteEarlyJarvis(
     ctx: SessionContext,
@@ -157,40 +165,70 @@ class ActionRouter {
     const tailWords = tail.split(/\s+/).filter(Boolean);
     if (tailWords.length < 2) return;
 
-    // --- Stabilisation: only fire when the command text hasn't changed
-    //     for earlyJarvisStableCount consecutive partials ---------------
-    const prev = this.partialTextByKey.get(key);
-    if (prev && prev.text === tail) {
-      prev.stableCount++;
-    } else {
-      // Text changed or first time we see this key
-      if (!prev) {
-        this.partialKeyOrder.push(key);
-        while (this.partialKeyOrder.length > ActionRouter.PARTIAL_TRACKING_MAX) {
-          const oldest = this.partialKeyOrder.shift()!;
-          this.partialTextByKey.delete(oldest);
-          this.dispatchedKeys.delete(oldest);
-          this.dispatchedTexts.delete(oldest);
-        }
-      }
-      this.partialTextByKey.set(key, { text: tail, stableCount: 1 });
-    }
+    // --- Time-based cutoff with a real timer ---------------------------
+    const existing = this.partialFirstSeen.get(key);
 
-    const stableCount = this.partialTextByKey.get(key)!.stableCount;
-    if (stableCount < config.earlyJarvisStableCount) {
-      console.log(`[jarvis] early candidate streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" stable=${stableCount}/${config.earlyJarvisStableCount}`);
+    if (existing) {
+      // Already tracking this key — update the latest tail text.
+      existing.latestTail = tail;
+      console.log(`[jarvis] early candidate (update) streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" cutoffIn=${Math.round((config.earlyJarvisCutoffMs - (Date.now() - existing.firstSeenAt)) / 100) / 10}s`);
       return;
     }
 
-    // Stable — dispatch now
-    this.dispatchedKeys.add(key);
-    this.dispatchedTexts.set(key, tail);
-    console.log(`[jarvis] dispatching from partial streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}"`);
+    // First time seeing this key — record it, start a real timer, and
+    // maintain FIFO eviction bounds.
+    this.partialKeyOrder.push(key);
+    while (this.partialKeyOrder.length > ActionRouter.PARTIAL_TRACKING_MAX) {
+      const oldest = this.partialKeyOrder.shift()!;
+      const entry = this.partialFirstSeen.get(oldest);
+      if (entry) {
+        clearTimeout(entry.timer);
+        this.partialFirstSeen.delete(oldest);
+      }
+      this.dispatchedKeys.delete(oldest);
+      this.dispatchedTexts.delete(oldest);
+    }
 
-    // Fire-and-forget: don't block the partial pipeline on handler I/O
-    this.dispatchJarvis(ctx, msg, tail).catch((err) =>
-      console.error('[jarvis] Partial dispatch error:', err),
-    );
+    const entry = {
+      firstSeenAt: Date.now(),
+      latestTail: tail,
+      timer: null as any as ReturnType<typeof setTimeout>,
+    };
+
+    // Start a real setTimeout — fires even if no further partials arrive
+    // (e.g. Moonshine hangs after the user stops speaking).
+    entry.timer = setTimeout(() => {
+      // Guard: already dispatched from a final? Cleaned up?
+      const cur = this.partialFirstSeen.get(key);
+      if (!cur) return;
+
+      const dispatchTail = cur.latestTail;
+      this.dispatchedKeys.add(key);
+      this.dispatchedTexts.set(key, dispatchTail);
+      this.partialFirstSeen.delete(key);
+
+      console.log(`[jarvis] dispatching from timer streamId=${msg.streamId} lineId=${msg.lineId} tail="${dispatchTail}" cutoffMs=${config.earlyJarvisCutoffMs}`);
+
+      this.dispatchJarvis(ctx, msg, dispatchTail).catch((err) =>
+        console.error('[jarvis] Timer dispatch error:', err),
+      );
+    }, config.earlyJarvisCutoffMs);
+
+    this.partialFirstSeen.set(key, entry);
+
+    console.log(`[jarvis] early candidate (first) streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" timerStarted=${config.earlyJarvisCutoffMs}ms`);
+  }
+
+  /**
+   * Cancel any pending early-dispatch timer for a key. Called from onFinal()
+   * when the final arrives before the timer fires.
+   */
+  private cancelEarlyTimer(key: string): void {
+    const entry = this.partialFirstSeen.get(key);
+    if (entry) {
+      clearTimeout(entry.timer);
+      this.partialFirstSeen.delete(key);
+    }
   }
 }
 
