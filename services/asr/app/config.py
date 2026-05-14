@@ -31,7 +31,7 @@ VAD_LOOK_BEHIND_SAMPLES: int = int(os.environ.get("MOONSHINE_VAD_LOOK_BEHIND_SAM
 VAD_MAX_SEGMENT: float = float(os.environ.get("MOONSHINE_VAD_MAX_SEGMENT_DURATION", "6.0"))
 
 # --- Endpoint flush (silence injection) ---
-ENDPOINT_IDLE_MS: int = int(os.environ.get("ASR_ENDPOINT_IDLE_MS", "350"))
+ENDPOINT_IDLE_MS: int = int(os.environ.get("ASR_ENDPOINT_IDLE_MS", "700"))
 ENDPOINT_SILENCE_MS: int = int(os.environ.get("ASR_ENDPOINT_SILENCE_MS", "500"))
 ENDPOINT_FORCE_UPDATES: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATES", "3"))
 ENDPOINT_FORCE_UPDATE_INTERVAL_MS: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATE_INTERVAL_MS", "150"))

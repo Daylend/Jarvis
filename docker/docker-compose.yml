@@ -46,7 +46,7 @@ services:
       # Uncomment for bring-up debugging — saves every stream's PCM under /app/debug-wavs.
       # - MOONSHINE_SAVE_INPUT_WAV_DIR=/app/debug-wavs
       # Endpoint flush: inject silence when speaker goes idle to force VAD final.
-      # - ASR_ENDPOINT_IDLE_MS=350
+      # - ASR_ENDPOINT_IDLE_MS=700
       # - ASR_ENDPOINT_SILENCE_MS=500
       # - ASR_ENDPOINT_FORCE_UPDATES=3
       # - ASR_ENDPOINT_FORCE_UPDATE_INTERVAL_MS=150
