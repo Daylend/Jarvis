@@ -4,16 +4,23 @@ Per-streamId adapter. Owns one Moonshine Transcriber for one Discord user.
 All VAD, segmentation, partial cadence, and final emission is owned by
 moonshine-voice itself. This class only:
   1. constructs a Transcriber bound to a streamId and a send_cb, and
-  2. forwards incoming s16le PCM chunks to it.
+  2. forwards incoming s16le PCM chunks to it via a dedicated feeder thread
+     so the asyncio event loop is never blocked by add_audio() or GIL
+     contention with Moonshine's inference thread.
 """
 import asyncio
 import logging
+import queue
+import threading
 import time
 from typing import Awaitable, Callable
 
 from app import asr as asr_module
 
 logger = logging.getLogger(__name__)
+
+# Sentinel value pushed into the queue to signal the feeder thread to exit.
+_STOP = object()
 
 
 class StreamHandler:
@@ -35,6 +42,17 @@ class StreamHandler:
             timestamps=self._timestamps,
         )
 
+        # Unbounded queue — the bot sends ~50 chunks/s per user at 16 kHz;
+        # each chunk is tiny (~640 B). Even if inference lags, memory is fine.
+        self._pcm_queue: queue.Queue[bytes | object] = queue.Queue()
+        self._feeder = threading.Thread(
+            target=self._feed_loop,
+            name=f"pcm-feed-{stream_id}",
+            daemon=True,
+        )
+        self._feeder.start()
+
+    # Called from the asyncio event loop — must not block.
     def push_pcm(self, pcm_s16le: bytes) -> None:
         if not pcm_s16le:
             return
@@ -42,10 +60,30 @@ class StreamHandler:
         if self._timestamps["t"] is None:
             self._timestamps["t"] = now
         self._timestamps["last_pcm"] = now
-        # Synchronous — Moonshine queues internally on its own thread.
-        asr_module.feed_pcm_s16le(self._transcriber, pcm_s16le)
+        self._pcm_queue.put_nowait(pcm_s16le)
+
+    def _feed_loop(self) -> None:
+        """Drain the PCM queue and feed Moonshine on a dedicated thread.
+
+        This keeps add_audio() (which may briefly hold the GIL or block on
+        an internal ring-buffer) off the asyncio event loop so partials and
+        finals can be dispatched promptly via run_coroutine_threadsafe.
+        """
+        while True:
+            item = self._pcm_queue.get()
+            if item is _STOP:
+                break
+            try:
+                asr_module.feed_pcm_s16le(self._transcriber, item)  # type: ignore[arg-type]
+            except Exception:
+                logger.exception("[stream %d] feed_pcm_s16le error", self.stream_id)
 
     async def close(self) -> None:
-        logger.info("[stream %d] closing", self.stream_id)
+        logger.info("[stream %d] closing (queue depth=%d)", self.stream_id, self._pcm_queue.qsize())
+        # Signal the feeder thread to exit and wait for it (off the event loop).
+        self._pcm_queue.put_nowait(_STOP)
+        await asyncio.to_thread(self._feeder.join, 5.0)
+        if self._feeder.is_alive():
+            logger.warning("[stream %d] feeder thread did not exit in time", self.stream_id)
         await asr_module.shutdown_transcriber(self._transcriber)
         self._transcriber = None  # type: ignore[assignment]

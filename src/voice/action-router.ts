@@ -50,6 +50,25 @@ class ActionRouter {
   ): Promise<void> {
     if (msg.userId !== config.ownerId) return;
 
+    // If we already dispatched this utterance from a stable partial, the
+    // final is just a correction — log it and skip.
+    if (msg.streamId !== undefined && msg.lineId !== undefined) {
+      const key = `${msg.streamId}:${msg.lineId}`;
+      if (this.dispatchedKeys.has(key)) {
+        const finalText = msg.textNormalized ?? '';
+        const dispatchedText = this.dispatchedTexts.get(key) ?? '';
+        if (finalText !== dispatchedText) {
+          console.log(`[jarvis] final correction lineId=${msg.lineId}: "${finalText}" (dispatched as "${dispatchedText}")`);
+        } else {
+          console.log(`[jarvis] final for already-dispatched utterance lineId=${msg.lineId} — skipping`);
+        }
+        this.partialTextByKey.delete(key);
+        this.dispatchedKeys.delete(key);
+        this.dispatchedTexts.delete(key);
+        return;
+      }
+    }
+
     const trigger = config.triggerPhrase.toLowerCase();
     const normalized = msg.textNormalized.toLowerCase();
     const idx = normalized.indexOf(trigger);
@@ -66,7 +85,16 @@ class ActionRouter {
       return;
     }
 
-    // Fetch context window: all users in the same channel, last N seconds
+    console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId}`);
+    await this.dispatchJarvis(ctx, msg, after);
+  }
+
+  /** Shared dispatch: fetches context window and invokes the handler. */
+  private async dispatchJarvis(
+    ctx: SessionContext,
+    msg: AsrMessage & { textNormalized: string; userId: string },
+    command: string,
+  ): Promise<void> {
     const windowMs = config.jarvisContextSeconds * 1000;
     const rows = await transcriptStore.contextWindow(ctx.guildId, ctx.channelId, windowMs);
 
@@ -75,7 +103,7 @@ class ActionRouter {
       .join('\n');
 
     const payload: JarvisPayload = {
-      command: after,
+      command,
       contextBlock,
       ctx,
       ownerText: msg.textNormalized,
@@ -89,33 +117,26 @@ class ActionRouter {
     }
   }
 
-  private static readonly EARLY_JARVIS_MAX = 1024;
+  private static readonly PARTIAL_TRACKING_MAX = 1024;
 
-  /** Map of "streamId:lineId" we have already considered for an early Jarvis fire.
-   *  Bounded to EARLY_JARVIS_MAX entries via FIFO eviction to prevent unbounded growth
-   *  across long-running sessions. */
-  private earlyJarvisSeen: Set<string> = new Set();
-  private earlyJarvisOrder: string[] = [];
-
-  private rememberEarlyJarvis(key: string): void {
-    if (this.earlyJarvisSeen.has(key)) return;
-    this.earlyJarvisSeen.add(key);
-    this.earlyJarvisOrder.push(key);
-    while (this.earlyJarvisOrder.length > ActionRouter.EARLY_JARVIS_MAX) {
-      const oldest = this.earlyJarvisOrder.shift()!;
-      this.earlyJarvisSeen.delete(oldest);
-    }
-  }
+  /** Maps "streamId:lineId" to partial command text and the number of
+   *  consecutive partials where that text has remained stable. */
+  private partialTextByKey = new Map<string, { text: string; stableCount: number }>();
+  /** FIFO key order for bounded eviction of partialTextByKey. */
+  private partialKeyOrder: string[] = [];
+  /** Keys we've already dispatched from a partial — prevents double-fires. */
+  private dispatchedKeys = new Set<string>();
+  /** Dispatched command text for correction logging when the final arrives. */
+  private dispatchedTexts = new Map<string, string>();
 
   /**
-   * Optional pre-detection: when EARLY_JARVIS_PARTIALS is enabled, look at
-   * partials from the owner. If the trigger phrase is already present and a
-   * command tail of >= 2 words has accumulated, log an "early candidate".
-   * The actual handler dispatch still waits for the final to keep semantics
-   * simple in v1 — this method is wiring only.
+   * Called for every partial from the owner. If the trigger phrase is present
+   * and the command tail (words after trigger) stabilises across
+   * config.earlyJarvisStableCount consecutive partials, fire the Jarvis
+   * handler immediately instead of waiting for the final.
    */
   noteEarlyJarvis(
-    _ctx: SessionContext,
+    ctx: SessionContext,
     msg: AsrMessage & { textNormalized: string; userId: string },
   ): void {
     if (!config.earlyJarvisPartials) return;
@@ -123,16 +144,53 @@ class ActionRouter {
     if (msg.streamId === undefined || msg.lineId === undefined) return;
 
     const key = `${msg.streamId}:${msg.lineId}`;
-    if (this.earlyJarvisSeen.has(key)) return;
+    if (this.dispatchedKeys.has(key)) return;
 
     const trigger = config.triggerPhrase.toLowerCase();
     const idx = msg.textNormalized.toLowerCase().indexOf(trigger);
     if (idx < 0) return;
-    const tail = msg.textNormalized.slice(idx + trigger.length).trim();
-    if (tail.split(/\s+/).filter(Boolean).length < 2) return;
 
-    this.rememberEarlyJarvis(key);
-    console.log(`[jarvis] early candidate streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}"`);
+    const tail = msg.textNormalized
+      .slice(idx + trigger.length)
+      .replace(/^[\s,.;:!?-]+/, '')
+      .trim();
+    const tailWords = tail.split(/\s+/).filter(Boolean);
+    if (tailWords.length < 2) return;
+
+    // --- Stabilisation: only fire when the command text hasn't changed
+    //     for earlyJarvisStableCount consecutive partials ---------------
+    const prev = this.partialTextByKey.get(key);
+    if (prev && prev.text === tail) {
+      prev.stableCount++;
+    } else {
+      // Text changed or first time we see this key
+      if (!prev) {
+        this.partialKeyOrder.push(key);
+        while (this.partialKeyOrder.length > ActionRouter.PARTIAL_TRACKING_MAX) {
+          const oldest = this.partialKeyOrder.shift()!;
+          this.partialTextByKey.delete(oldest);
+          this.dispatchedKeys.delete(oldest);
+          this.dispatchedTexts.delete(oldest);
+        }
+      }
+      this.partialTextByKey.set(key, { text: tail, stableCount: 1 });
+    }
+
+    const stableCount = this.partialTextByKey.get(key)!.stableCount;
+    if (stableCount < config.earlyJarvisStableCount) {
+      console.log(`[jarvis] early candidate streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" stable=${stableCount}/${config.earlyJarvisStableCount}`);
+      return;
+    }
+
+    // Stable — dispatch now
+    this.dispatchedKeys.add(key);
+    this.dispatchedTexts.set(key, tail);
+    console.log(`[jarvis] dispatching from partial streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}"`);
+
+    // Fire-and-forget: don't block the partial pipeline on handler I/O
+    this.dispatchJarvis(ctx, msg, tail).catch((err) =>
+      console.error('[jarvis] Partial dispatch error:', err),
+    );
   }
 }
 
