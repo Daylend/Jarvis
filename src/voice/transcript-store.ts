@@ -30,7 +30,7 @@ export const transcriptStore = {
         sessionId: session.id,
         ...(userId ? { userId } : {}),
       },
-      orderBy: { startMs: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: count,
     });
   },
