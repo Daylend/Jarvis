@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Validate that the configured Moonshine model is on disk.
+    """Validate the Moonshine model and manage the shared Transcriber lifecycle.
 
-    Each /ws/transcribe stream lazily constructs its own Transcriber. ONNX
-    Runtime mmaps the .ort file so the per-stream cost is small.
+    A single Transcriber is shared across all WebSocket sessions via
+    create_stream(). ONNX Runtime mmaps the .ort file once.
     """
     info = asr_module.get_engine_info()
     if not asr_module.is_loaded():
@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
         logger.info("[lifespan] ASR ready: engine=%s model=%s", info["engine"], info["model"])
     yield
     logger.info("Shutting down ASR sidecar.")
+    asr_module.shutdown_global_transcriber()
 
 
 app = FastAPI(title="PaxFax ASR Sidecar", lifespan=lifespan)

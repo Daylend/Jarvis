@@ -1,9 +1,9 @@
 """
-Per-streamId adapter. Owns one Moonshine Transcriber for one Discord user.
+Per-streamId adapter. Owns one Moonshine stream on the shared Transcriber.
 
 All VAD, segmentation, partial cadence, and final emission is owned by
 moonshine-voice itself. This class only:
-  1. constructs a Transcriber bound to a streamId and a send_cb, and
+  1. creates a stream on the shared Transcriber via build_stream(), and
   2. forwards incoming s16le PCM chunks to it via a dedicated feeder thread
      so the asyncio event loop is never blocked by add_audio() or GIL
      contention with Moonshine's inference thread.
@@ -35,7 +35,7 @@ class StreamHandler:
         # Shared with _Bridge so listener thread can read first-chunk and last-pcm timestamps.
         self._timestamps: dict = {"t": None, "last_pcm": None, "first_partial_seen": set()}
         loop = asyncio.get_running_loop()
-        self._transcriber = asr_module.build_transcriber(
+        self._stream = asr_module.build_stream(
             loop=loop,
             emit=send_cb,
             stream_id=stream_id,
@@ -74,7 +74,7 @@ class StreamHandler:
             if item is _STOP:
                 break
             try:
-                asr_module.feed_pcm_s16le(self._transcriber, item)  # type: ignore[arg-type]
+                asr_module.feed_pcm_to_stream(self._stream, item)
             except Exception:
                 logger.exception("[stream %d] feed_pcm_s16le error", self.stream_id)
 
@@ -85,5 +85,5 @@ class StreamHandler:
         await asyncio.to_thread(self._feeder.join, 5.0)
         if self._feeder.is_alive():
             logger.warning("[stream %d] feeder thread did not exit in time", self.stream_id)
-        await asr_module.shutdown_transcriber(self._transcriber)
-        self._transcriber = None  # type: ignore[assignment]
+        await asr_module.shutdown_stream(self._stream)
+        self._stream = None  # type: ignore[assignment]

@@ -1,5 +1,9 @@
 """
-Moonshine Voice ASR wrapper. One Transcriber instance per audio stream.
+Moonshine Voice ASR wrapper. One shared Transcriber with per-user streams.
+
+Moonshine's C API supports multiple streams per Transcriber, sharing a
+single ONNX Runtime session. This eliminates redundant model loads and
+thread pools when multiple users speak simultaneously.
 
 Moonshine listener callbacks fire on a background thread inside the
 moonshine-voice runtime. We bounce every event back to the asyncio loop
@@ -9,9 +13,9 @@ touch the WebSocket from a non-loop thread.
 from __future__ import annotations
 
 import asyncio
-import gc
 import logging
 import os
+import threading
 import time
 from typing import Awaitable, Callable
 
@@ -112,15 +116,14 @@ class _Bridge(TranscriptEventListener):
         })
 
 
-def build_transcriber(
-    *,
-    loop: asyncio.AbstractEventLoop,
-    emit: EmitCb,
-    stream_id: int,
-    timestamps: dict,
-) -> Transcriber:
-    """Create, configure, and start() a Transcriber. Caller owns shutdown."""
-    options = {
+# ── Shared Transcriber singleton ─────────────────────────────────────────
+
+_transcriber: Transcriber | None = None
+_transcriber_lock = threading.Lock()
+
+
+def _build_options(stream_id: int | None = None) -> dict:
+    opts = {
         "return_audio_data": "false",
         "identify_speakers": "false",
         "vad_threshold": str(config.VAD_THRESHOLD),
@@ -129,52 +132,117 @@ def build_transcriber(
         "vad_max_segment_duration": str(config.VAD_MAX_SEGMENT),
         "log_output_text": "true" if config.LOG_OUTPUT_TEXT else "false",
     }
-
-    if config.SAVE_INPUT_WAV_DIR:
+    if config.SAVE_INPUT_WAV_DIR and stream_id is not None:
         os.makedirs(config.SAVE_INPUT_WAV_DIR, exist_ok=True)
-        options["save_input_wav_path"] = os.path.join(
+        opts["save_input_wav_path"] = os.path.join(
             config.SAVE_INPUT_WAV_DIR, f"stream-{stream_id}.wav"
         )
+    return opts
 
-    transcriber = Transcriber(
-        model_path=config.MODEL_PATH,
-        model_arch=ModelArch(config.MODEL_ARCH),
-        update_interval=config.UPDATE_INTERVAL,
-        options=options,
-    )
+
+def get_transcriber() -> Transcriber:
+    """Return the singleton Transcriber, creating it on first access."""
+    global _transcriber
+    if _transcriber is not None:
+        return _transcriber
+    with _transcriber_lock:
+        if _transcriber is not None:
+            return _transcriber
+        _transcriber = Transcriber(
+            model_path=config.MODEL_PATH,
+            model_arch=ModelArch(config.MODEL_ARCH),
+            update_interval=config.UPDATE_INTERVAL,
+            options=_build_options(),
+        )
+        # Use a dummy listener on the default stream so the Transcriber
+        # starts its background threads. We never feed the default stream —
+        # all audio goes through per-user streams created by build_stream().
+        _transcriber.start()
+        logger.info(
+            "[asr] Shared Transcriber started update_interval=%.3fs vad_window=%.3fs vad_max_segment=%.1fs",
+            config.UPDATE_INTERVAL, config.VAD_WINDOW_DURATION, config.VAD_MAX_SEGMENT,
+        )
+        return _transcriber
+
+
+def shutdown_global_transcriber() -> None:
+    """Stop the singleton Transcriber. Called once at process exit."""
+    global _transcriber
+    if _transcriber is None:
+        return
+    logger.info("[asr] Shutting down shared Transcriber")
+    try:
+        _transcriber.stop()
+    except Exception:
+        logger.exception("[asr] Transcriber.stop() failed")
+    _transcriber = None
+
+
+# ── Per-user stream helpers ─────────────────────────────────────────────
+
+def build_stream(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    emit: EmitCb,
+    stream_id: int,
+    timestamps: dict,
+) -> object:
+    """Create a Moonshine stream on the shared Transcriber.
+
+    Returns a Moonshine stream object that supports add_listener(),
+    start(), add_audio(), and stop().
+    """
+    transcriber = get_transcriber()
+    stream = transcriber.create_stream(update_interval=config.UPDATE_INTERVAL)
     bridge = _Bridge(loop, emit, stream_id, timestamps)
-    transcriber.add_listener(bridge)
-    # Stash the bridge on the transcriber so shutdown_transcriber can detach it
-    # before dropping references. This breaks the ref cycle that keeps ORT
-    # InferenceSession native arenas alive.
-    transcriber._paxfax_bridge = bridge  # type: ignore[attr-defined]
-    transcriber.start()
-    logger.info(
-        "[asr] Transcriber started stream=%d update_interval=%.3fs vad_window=%.3fs vad_max_segment=%.1fs",
-        stream_id, config.UPDATE_INTERVAL, config.VAD_WINDOW_DURATION, config.VAD_MAX_SEGMENT,
-    )
-    return transcriber
+    stream.add_listener(bridge)
+    # Stash the bridge for detach on shutdown — avoids ref-cycle leaks.
+    stream._paxfax_bridge = bridge  # type: ignore[attr-defined]
+    stream.start()
+    logger.info("[asr] Stream %d started on shared Transcriber", stream_id)
+    return stream
 
 
-def feed_pcm_s16le(transcriber: Transcriber, pcm_s16le: bytes) -> None:
-    """Convert s16le mono → float32 mono in [-1, 1] and feed Moonshine."""
+def feed_pcm_to_stream(stream: object, pcm_s16le: bytes) -> None:
+    """Convert s16le mono → float32 mono in [-1, 1] and feed stream."""
     if not pcm_s16le:
         return
-    # numpy int16→float32 cast then divide. Use 32768.0 (not 32767) — matches the
-    # int16 range convention everywhere else in this codebase.
+    audio = np.frombuffer(pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
+    stream.add_audio(audio, config.SAMPLE_RATE)
+
+
+async def shutdown_stream(stream: object) -> None:
+    """Stop one user's stream and detach its listener bridge.
+
+    The shared Transcriber stays alive — only this stream is torn down."""
+    logger.info("[asr] Shutting down stream")
+    await asyncio.to_thread(stream.stop)
+
+    bridge = getattr(stream, "_paxfax_bridge", None)
+    if bridge is not None:
+        try:
+            bridge.detach()
+        except Exception:
+            pass
+        try:
+            stream._paxfax_bridge = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+# ── Backwards-compat aliases (kept for external callers) ────────────────
+
+def feed_pcm_s16le(transcriber: object, pcm_s16le: bytes) -> None:
+    """DEPRECATED: kept for backwards compat. Use feed_pcm_to_stream instead."""
+    if not pcm_s16le:
+        return
     audio = np.frombuffer(pcm_s16le, dtype=np.int16).astype(np.float32) / 32768.0
     transcriber.add_audio(audio, config.SAMPLE_RATE)
 
 
-async def shutdown_transcriber(transcriber: Transcriber) -> None:
-    """Stop the transcriber, detach the listener bridge, and force a GC pass
-    so ONNX Runtime InferenceSession native destructors run promptly, releasing
-    arena memory back to the allocator. Without this, RSS climbs monotonically
-    across stream lifecycles."""
+async def shutdown_transcriber(transcriber: object) -> None:
+    """DEPRECATED: kept for backwards compat. Use shutdown_stream instead."""
     await asyncio.to_thread(transcriber.stop)
-
-    # Detach the listener bridge so any late thread callbacks become no-ops
-    # and the WS event loop can be garbage-collected with the session.
     bridge = getattr(transcriber, "_paxfax_bridge", None)
     if bridge is not None:
         try:
@@ -185,13 +253,10 @@ async def shutdown_transcriber(transcriber: Transcriber) -> None:
             transcriber._paxfax_bridge = None  # type: ignore[attr-defined]
         except Exception:
             pass
-
-    # Drop the transcriber wrapper and force GC so ORT C++ destructors fire.
     try:
         del transcriber
     except Exception:
         pass
-    gc.collect()
 
 
 def get_engine_info() -> dict:
