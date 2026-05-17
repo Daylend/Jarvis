@@ -19,8 +19,8 @@ services:
       - OWNER_USER_ID=${OWNER_USER_ID}
       - OPENWEBUI_API_URL=${OPENWEBUI_API_URL}
       - OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}
-      - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr:8765/ws/transcribe}
-      - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr:8765}
+      - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr-whisper-rocm:8765/ws/transcribe}
+      - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr-whisper-rocm:8765}
       - AUTO_JOIN_OWNER=${AUTO_JOIN_OWNER:-true}
       - TRIGGER_PHRASE=${TRIGGER_PHRASE:-jarvis}
       - JARVIS_CONTEXT_SECONDS=${JARVIS_CONTEXT_SECONDS:-180}
@@ -34,7 +34,7 @@ services:
     networks:
       - deploy
     depends_on:
-      asr:
+      asr-whisper-rocm:
         condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -43,6 +43,8 @@ services:
     image: registry.example.com/paxfax-asr:latest
     container_name: paxfax-asr
     restart: unless-stopped
+    profiles:
+      - moonshine
     environment:
       - MOONSHINE_MODEL_DIR=/app/models
       - MOONSHINE_LANGUAGE=en
@@ -66,6 +68,50 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - deploy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  asr-whisper-rocm:
+    image: registry.example.com/paxfax-asr-whisper-rocm:latest
+    container_name: paxfax-asr-whisper-rocm
+    restart: unless-stopped
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      - ASR_MODEL_ID=${ASR_MODEL_ID:-openai/whisper-large-v3-turbo}
+      - ASR_DEVICE=${ASR_DEVICE:-cuda:0}
+      - ASR_DTYPE=${ASR_DTYPE:-float16}
+      - ASR_ENABLE_PARTIALS=${ASR_ENABLE_PARTIALS:-false}
+      - ASR_LANGUAGE=${ASR_LANGUAGE:-en}
+      - ASR_TASK=${ASR_TASK:-transcribe}
+      - ASR_VAD_THRESHOLD=${ASR_VAD_THRESHOLD:-0.50}
+      - ASR_VAD_MIN_SILENCE_MS=${ASR_VAD_MIN_SILENCE_MS:-800}
+      - ASR_VAD_SPEECH_PAD_MS=${ASR_VAD_SPEECH_PAD_MS:-300}
+      - ASR_MAX_UTTERANCE_S=${ASR_MAX_UTTERANCE_S:-24.0}
+      - HF_HOME=/models/hf
+      - TRANSFORMERS_CACHE=/models/hf
+    volumes:
+      - /mnt/user/appdata/paxfax/asr-hf-cache:/models/hf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
     logging:
       driver: "json-file"
       options:

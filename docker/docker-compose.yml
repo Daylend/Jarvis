@@ -13,8 +13,8 @@ services:
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=info
       - LOG_DIR=/app/logs
-      - TRANSCRIBE_WS_URL=ws://asr:8765/ws/transcribe
-      - TRANSCRIBE_HTTP_URL=http://asr:8765
+      - TRANSCRIBE_WS_URL=ws://asr-whisper-rocm:8765/ws/transcribe
+      - TRANSCRIBE_HTTP_URL=http://asr-whisper-rocm:8765
       - AUTO_JOIN_OWNER=true
       - TRIGGER_PHRASE=jarvis
       - JARVIS_CONTEXT_SECONDS=180
@@ -26,7 +26,7 @@ services:
         max-size: "10m"
         max-file: "3"
     depends_on:
-      asr:
+      asr-whisper-rocm:
         condition: service_healthy
 
   asr:
@@ -34,6 +34,8 @@ services:
       context: ..
       dockerfile: services/asr/Dockerfile
     restart: unless-stopped
+    profiles:
+      - moonshine
     environment:
       - MOONSHINE_MODEL_DIR=/app/models
       - MOONSHINE_LANGUAGE=en
@@ -66,3 +68,51 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  asr-whisper-rocm:
+    build:
+      context: ..
+      dockerfile: services/asr-whisper-rocm/Dockerfile
+      args:
+        BASE_IMAGE: rocm/pytorch:latest
+    restart: unless-stopped
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      - ASR_MODEL_ID=openai/whisper-large-v3-turbo
+      - ASR_DEVICE=cuda:0
+      - ASR_DTYPE=float16
+      - ASR_ENABLE_PARTIALS=false
+      - ASR_LANGUAGE=en
+      - ASR_TASK=transcribe
+      - ASR_VAD_THRESHOLD=0.50
+      - ASR_VAD_MIN_SILENCE_MS=800
+      - ASR_VAD_SPEECH_PAD_MS=300
+      - ASR_MAX_UTTERANCE_S=24.0
+      - HF_HOME=/models/hf
+      - TRANSFORMERS_CACHE=/models/hf
+    volumes:
+      - asr_hf_cache:/models/hf
+    ports:
+      - "8765:8765"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  asr_hf_cache:

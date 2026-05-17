@@ -33,7 +33,7 @@ export interface AsrMessage {
   type: 'ready' | 'partial' | 'final' | 'error' | 'pong';
   streamId?: number;
   /** Stable per-utterance id from Moonshine. Present on every `partial` and `final`. */
-  lineId?: number;
+  lineId?: number | string;
   text?: string;
   startMs?: number;
   endMs?: number;
