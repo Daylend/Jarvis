@@ -6,3 +6,5 @@ data/
 .DS_Store
 prisma/*.db
 prisma/*.db-journal
+.kilo/*
+plans/

@@ -25,6 +25,7 @@ services:
       - TRIGGER_PHRASE=${TRIGGER_PHRASE:-jarvis}
       - JARVIS_CONTEXT_SECONDS=${JARVIS_CONTEXT_SECONDS:-180}
       - VOICE_IDLE_TIMEOUT_SEC=${VOICE_IDLE_TIMEOUT_SEC:-900}
+      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama-cpp:8080/v1}
     logging:
       driver: "json-file"
       options:

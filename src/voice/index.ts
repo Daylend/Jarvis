@@ -1,5 +1,7 @@
 import type { Client } from 'discord.js';
 import { normalizer } from './normalizer';
+import { actionRouter } from './action-router';
+import { createJarvisHandler } from './jarvis-handler';
 import { registerOwnerWatch, startupAutoJoin } from './owner-watch';
 
 export { sessionManager } from './session-manager';
@@ -16,6 +18,9 @@ export { startupAutoJoin } from './owner-watch';
 export async function bootstrapVoice(client: Client): Promise<void> {
   // Load term aliases from DB (seeds from JSON if empty)
   await normalizer.load();
+
+  // Wire Jarvis LLM handler
+  actionRouter.setHandler(createJarvisHandler(client));
 
   // Register the VoiceStateUpdate handler for owner auto-join
   registerOwnerWatch(client);
