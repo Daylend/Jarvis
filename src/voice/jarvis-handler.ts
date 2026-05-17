@@ -110,9 +110,11 @@ export function createJarvisHandler(client: Client): CommandHandler {
 
     let finalText: string | null = null;
     let toolDelivered = false;
+    let iterCount = 0;
 
     for (let iter = 0; iter < MAX_TOOL_LOOP; iter++) {
-      console.log(`[jarvis] LLM call iteration ${iter + 1}/${MAX_TOOL_LOOP}`);
+      iterCount = iter + 1;
+      console.log(`[jarvis] LLM call iteration ${iterCount}/${MAX_TOOL_LOOP}`);
 
       try {
         const response = await axios.post(
@@ -122,7 +124,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
             messages,
             tools: toolRegistry.getAllDefinitions(),
             temperature: 0.7,
-            max_tokens: 512,
+            max_tokens: 2048,
           },
           {
             headers: { 'Content-Type': 'application/json' },
@@ -140,9 +142,9 @@ export function createJarvisHandler(client: Client): CommandHandler {
           break;
         }
 
-        const assistantMsg = choice.message as ChatMessage;
+        const assistantMsg = choice.message as ChatMessage & { reasoning_content?: string };
         const sanitizedContent = sanitizeLlmContent(assistantMsg.content);
-        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
+        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason, reasoning_preview: assistantMsg.reasoning_content?.slice(0, 200) }));
 
         if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
           messages.push(assistantMsg);
@@ -223,7 +225,10 @@ export function createJarvisHandler(client: Client): CommandHandler {
           break;
         }
 
-        console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg));
+        if (choice.finish_reason === 'length') {
+          console.warn('[jarvis] LLM hit token limit during reasoning — no output produced (try increasing max_tokens). reasoning_content:', (assistantMsg as any).reasoning_content?.slice(0, 200));
+        }
+        console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg), 'finish_reason:', choice.finish_reason);
         break;
       } catch (err) {
         const errorMsg = (err as Error).message;
@@ -254,7 +259,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
     } else if (toolDelivered) {
       console.log(`[jarvis] Tool already delivered response (${elapsed}ms)`);
     } else {
-      console.warn(`[jarvis] No final response after ${MAX_TOOL_LOOP} iterations (${elapsed}ms)`);
+      console.warn(`[jarvis] No final response after ${iterCount} iterations (${elapsed}ms)`);
 
       if (messages.length > 0) {
         const lastContent = messages
