@@ -41,6 +41,12 @@ function buildUserPrompt(payload: JarvisPayload): string {
   return prompt;
 }
 
+function sanitizeLlmContent(raw: string | null): string | null {
+  if (!raw) return null;
+  const cleaned = raw.replace(/<\|[^|]*\|>/g, '').trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 async function requestApproval(
   client: Client,
   ownerId: string,
@@ -124,6 +130,10 @@ export function createJarvisHandler(client: Client): CommandHandler {
           },
         );
 
+        console.log(
+          `[jarvis] LLM HTTP ${response.status}, choices: ${response.data.choices?.length ?? 'none'}, raw: ${JSON.stringify(response.data).slice(0, 500)}`,
+        );
+
         const choice = response.data.choices?.[0];
         if (!choice) {
           console.error('[jarvis] LLM response had no choices');
@@ -131,7 +141,8 @@ export function createJarvisHandler(client: Client): CommandHandler {
         }
 
         const assistantMsg = choice.message as ChatMessage;
-        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
+        const sanitizedContent = sanitizeLlmContent(assistantMsg.content);
+        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
 
         if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
           messages.push(assistantMsg);
@@ -206,13 +217,13 @@ export function createJarvisHandler(client: Client): CommandHandler {
           continue;
         }
 
-        if (assistantMsg.content) {
+        if (sanitizedContent) {
           messages.push(assistantMsg);
-          finalText = assistantMsg.content;
+          finalText = sanitizedContent;
           break;
         }
 
-        console.warn('[jarvis] LLM returned neither content nor tool calls');
+        console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg));
         break;
       } catch (err) {
         const errorMsg = (err as Error).message;
@@ -240,6 +251,8 @@ export function createJarvisHandler(client: Client): CommandHandler {
       } catch (err) {
         console.error(`[jarvis] Failed to DM owner: ${(err as Error).message}`);
       }
+    } else if (toolDelivered) {
+      console.log(`[jarvis] Tool already delivered response (${elapsed}ms)`);
     } else {
       console.warn(`[jarvis] No final response after ${MAX_TOOL_LOOP} iterations (${elapsed}ms)`);
 
