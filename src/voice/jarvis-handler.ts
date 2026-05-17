@@ -131,6 +131,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
         }
 
         const assistantMsg = choice.message as ChatMessage;
+        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
 
         if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
           messages.push(assistantMsg);
