@@ -4,6 +4,7 @@ import { config } from '../config';
 import { sessionManager } from './session-manager';
 
 const noop = () => {};
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /**
  * On startup, scan all guilds the bot is in. If the owner is in a voice
@@ -122,6 +123,7 @@ export function registerOwnerWatch(client: Client): void {
       console.log(`[owner-watch] Owner joined channel ${channel.name} (${newChannelId}) in guild ${newState.guild.id}`);
 
       try {
+        await delay(1000);
         await sessionManager.start({
           guild: newState.guild,
           voiceChannel: channel,
