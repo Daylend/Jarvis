@@ -18,7 +18,7 @@
   "Offin": ["offin", "ofin"],
   "Garmoth": ["garmoth", "garmouth"],
   "Vell": ["vel"],
-  "Quint": ["quint"],
+  "Quint": ["quint", "quim"],
   "Muraka": ["muraka", "muraca"],
   "Lifeskill": ["life skill", "lifeskils"],
   "Gathering": ["gatherin", "gatherring"],
@@ -32,7 +32,7 @@
   "Farming": ["farmin"],
   "Sailing": ["sailin"],
   "Bartering": ["barterin"],
-  "PEN": ["pen tier", "pin tier", "peen"],
+  "PEN": ["pen tier", "pin tier", "peen", "pen"],
   "TET": ["tet tier", "tet enhancement"],
   "TRI": ["tri tier", "tri enhancement"],
   "DUO": ["duo tier", "duo enhancement"],
@@ -73,5 +73,6 @@
   "Atoraxxion": ["atoraxxion", "atoraxion"],
   "Crypt of Resting Thoughts": ["crypt", "resting thoughts"],
   "Sycrakea": ["sycrakea", "sicrakea"],
-  "Jarvis": ["travis"]
+  "Jarvis": ["travis"],
+  "Balenos": ["ballot house", "Valenaus"]
 }
