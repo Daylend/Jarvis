@@ -108,6 +108,7 @@ class StreamHandler:
         silence_ms = asr_module.config.ENDPOINT_SILENCE_MS
         max_updates = asr_module.config.ENDPOINT_FORCE_UPDATES
         update_interval_ms = asr_module.config.ENDPOINT_FORCE_UPDATE_INTERVAL_MS
+        max_silence_ms = asr_module.config.ENDPOINT_MAX_SILENCE_MS
 
         while not self._watchdog_stop.wait(poll_interval):
             last_pcm = self._timestamps.get("last_pcm")
@@ -118,12 +119,12 @@ class StreamHandler:
             elapsed_ms = (now - last_pcm) * 1000.0
 
             if self._flush_state == "idle" and elapsed_ms >= idle_ms:
-                # First flush: inject silence to cross update_interval threshold
+                inject_ms = min(int(elapsed_ms), max_silence_ms)
                 logger.info(
-                    "[stream %d] endpoint flush start: idle=%.0fms injecting %dms silence",
-                    self.stream_id, elapsed_ms, silence_ms,
+                    "[stream %d] endpoint flush start: idle=%.0fms injecting %dms silence (actual gap)",
+                    self.stream_id, elapsed_ms, inject_ms,
                 )
-                self._pcm_queue.put_nowait((_SILENCE, silence_ms))
+                self._pcm_queue.put_nowait((_SILENCE, inject_ms))
                 self._flush_state = "flushing"
                 self._flush_count = 1
                 self._last_flush_at = now

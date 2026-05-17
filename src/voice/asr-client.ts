@@ -21,8 +21,11 @@ interface SessionState {
    *  Key is a composite of lineId+endMs because Moonshine may reuse lineId across utterances within
    *  a single long-lived Manual stream; endMs disambiguates. */
   finalsByStream: Map<number, Set<string>>;
-  /** streamId -> last final text (original, untrimmed), used to trim cross-segment overlap */
-  lastFinalText: Map<number, string>;
+  /** streamId -> set of "lineId:text" keys. Catches re-emissions of the same line with different
+   *  endMs (caused by endpoint flush silence injection). */
+  finalTextsByStream: Map<number, Set<string>>;
+  /** streamId -> last final info (original text + endMs), used to trim cross-segment overlap */
+  lastFinalText: Map<number, { text: string; endMs: number }>;
 }
 
 const MAX_BUFFERED = 1_000_000; // 1 MB
@@ -33,37 +36,71 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
  *  Prevents false positives on common short phrases like "the" or "I". */
 const MIN_OVERLAP_WORDS = 3;
 
+function stripPunct(word: string): string {
+  return word.replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 /**
  * If the tail of `prev` overlaps with the head of `current`, return `current`
- * with the overlapping prefix stripped. Uses a case-insensitive suffix/prefix word match.
+ * with the overlapping prefix stripped. Uses a case-insensitive, punctuation-agnostic
+ * suffix/prefix word match.
+ *
+ * @param minWords Minimum overlapping words to consider (default MIN_OVERLAP_WORDS).
+ *                 Lowered to 2 when temporal overlap is confirmed via timestamps.
  *
  * Example:
  *   prev    = "are in these fights right now."
  *   current = "these fights right now. Having a double"
  *   result  = "Having a double"
- *
- * Only considers overlaps of >= MIN_OVERLAP_WORDS words to avoid false positives
- * on common short phrases like "the" or "I".
  */
-function trimOverlap(prev: string, current: string): string {
+function trimOverlap(prev: string, current: string, minWords = MIN_OVERLAP_WORDS): string {
   const prevWords = prev.split(/\s+/);
   const currentWords = current.split(/\s+/);
 
   const maxCheck = Math.min(prevWords.length, currentWords.length);
 
-  for (let overlapLen = maxCheck; overlapLen >= MIN_OVERLAP_WORDS; overlapLen--) {
-    const prevSuffix = prevWords.slice(-overlapLen).join(' ').toLowerCase();
-    const currentPrefix = currentWords.slice(0, overlapLen).join(' ').toLowerCase();
+  for (let overlapLen = maxCheck; overlapLen >= minWords; overlapLen--) {
+    const prevSuffix = prevWords.slice(-overlapLen).map(w => stripPunct(w).toLowerCase());
+    const currentPrefix = currentWords.slice(0, overlapLen).map(w => stripPunct(w).toLowerCase());
 
-    if (prevSuffix === currentPrefix) {
+    if (prevSuffix.some(w => w.length === 0) || currentPrefix.some(w => w.length === 0)) continue;
+
+    if (prevSuffix.every((w, i) => w === currentPrefix[i])) {
       const trimmed = currentWords.slice(overlapLen).join(' ');
-      // If trimming would empty the string entirely, keep the original
-      // (this can happen if the new final is entirely contained in the old one).
       return trimmed || current;
     }
   }
 
-  return current; // No overlap found
+  return current;
+}
+
+/** Max consecutive occurrences of the same word before we consider it repetition noise. */
+const MAX_CONSECUTIVE_REPEATS = 3;
+
+function suppressRepetition(text: string): string | null {
+  const words = text.split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) return null;
+
+  let repeatStart = -1;
+  let runLength = 1;
+  for (let i = 1; i < words.length; i++) {
+    if (words[i].toLowerCase() === words[i - 1].toLowerCase()) {
+      runLength++;
+      if (runLength > MAX_CONSECUTIVE_REPEATS && repeatStart === -1) {
+        repeatStart = i - runLength + 2;
+      }
+    } else {
+      runLength = 1;
+    }
+  }
+
+  if (repeatStart === -1) return text;
+
+  const kept = words.slice(0, repeatStart).join(' ').replace(/[,\s]+$/, '').trim();
+  const keptWords = kept.split(/\s+/).filter(w => w.length > 0);
+  if (keptWords.length < 2) return null;
+
+  return kept;
 }
 
 let opensTotal = 0;
@@ -87,6 +124,7 @@ class AsrClient {
       streamUsers: new Map(),
       openStreams: new Map(),
       finalsByStream: new Map(),
+      finalTextsByStream: new Map(),
       lastFinalText: new Map(),
     };
     this.sessions.set(ctx.id, state);
@@ -121,6 +159,7 @@ class AsrClient {
     if (!state) return;
     state.openStreams.delete(streamId);
     state.finalsByStream.delete(streamId);
+    state.finalTextsByStream.delete(streamId);
     state.lastFinalText.delete(streamId);
     state.streamUsers.delete(streamId);
     closesTotal++;
@@ -282,6 +321,18 @@ class AsrClient {
         return;
       }
       seen.add(dedupKey);
+
+      const textDedupKey = `${lineId}:${msg.text}`;
+      let textSeen = state.finalTextsByStream.get(msg.streamId);
+      if (!textSeen) {
+        textSeen = new Set();
+        state.finalTextsByStream.set(msg.streamId, textSeen);
+      }
+      if (textSeen.has(textDedupKey)) {
+        console.log(`[asr-client] duplicate final (same text) dropped streamId=${msg.streamId} lineId=${lineId}`);
+        return;
+      }
+      textSeen.add(textDedupKey);
     }
 
     const userId = state.streamUsers.get(msg.streamId);
@@ -294,19 +345,34 @@ class AsrClient {
     // Moonshine's VAD look-behind buffer can cause the start of a new segment
     // to include text that was already transcribed at the end of the previous
     // segment. Trim any overlapping prefix from the current final's text.
-    const prevText = state.lastFinalText.get(msg.streamId);
+    const prev = state.lastFinalText.get(msg.streamId);
     let textForNormalization = msg.text;
-    if (prevText) {
-      const trimmed = trimOverlap(prevText, msg.text);
+    if (prev) {
+      const hasTemporalOverlap = (msg.startMs ?? 0) < prev.endMs;
+      const minWords = hasTemporalOverlap ? 2 : MIN_OVERLAP_WORDS;
+      const trimmed = trimOverlap(prev.text, msg.text, minWords);
       if (trimmed !== msg.text) {
         const removedWords = msg.text.split(/\s+/).length - trimmed.split(/\s+/).length;
-        console.log(`[asr-client] overlap trimmed: removed ${removedWords} words from head of final streamId=${msg.streamId}`);
+        console.log(
+          `[asr-client] overlap trimmed: removed ${removedWords} words from head of final streamId=${msg.streamId}` +
+          (hasTemporalOverlap ? ` (temporal overlap: startMs=${msg.startMs} < prevEndMs=${prev.endMs})` : ''),
+        );
         textForNormalization = trimmed;
       }
     }
-    // Store the ORIGINAL (untrimmed) text for the next comparison — overlap
-    // detection must check against what Moonshine actually produced, not what we trimmed.
-    state.lastFinalText.set(msg.streamId, msg.text);
+    // Store the ORIGINAL (untrimmed) text + endMs for the next comparison.
+    state.lastFinalText.set(msg.streamId, { text: msg.text, endMs: msg.endMs ?? 0 });
+
+    // --- Repetition suppression ---
+    const deRepeated = suppressRepetition(textForNormalization);
+    if (deRepeated === null) {
+      console.log(`[asr-client] repetition-only final dropped streamId=${msg.streamId} text="${textForNormalization}"`);
+      return;
+    }
+    if (deRepeated !== textForNormalization) {
+      console.log(`[asr-client] repetition truncated streamId=${msg.streamId}: "${textForNormalization}" → "${deRepeated}"`);
+      textForNormalization = deRepeated;
+    }
 
     const textNormalized = normalizer.apply(textForNormalization);
 
