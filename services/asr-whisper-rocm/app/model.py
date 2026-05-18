@@ -37,7 +37,6 @@ class WhisperEngine:
             torch_dtype = torch.float32
 
         model_kwargs = {
-            "torch_dtype": torch_dtype,
             "low_cpu_mem_usage": True,
             "use_safetensors": True,
             "attn_implementation": "sdpa",
@@ -76,19 +75,23 @@ class WhisperEngine:
         self.queue.put_nowait(job)
 
     async def _worker(self) -> None:
-        while True:
-            job = await self.queue.get()
-            try:
-                result = await asyncio.to_thread(self._run_one, job.audio)
-                if not job.future.done():
-                    job.future.set_result(result)
-            except Exception as exc:
-                logger.exception("Inference failed for stream=%d line=%s",
-                                 job.stream_id, job.line_id)
-                if not job.future.done():
-                    job.future.set_exception(exc)
-            finally:
-                self.queue.task_done()
+        try:
+            while True:
+                job = await self.queue.get()
+                try:
+                    result = await asyncio.to_thread(self._run_one, job.audio)
+                    if not job.future.done():
+                        job.future.set_result(result)
+                except Exception as exc:
+                    logger.exception("Inference failed for stream=%d line=%s",
+                                     job.stream_id, job.line_id)
+                    if not job.future.done():
+                        job.future.set_exception(exc)
+                finally:
+                    self.queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Inference worker shutting down")
+            raise
 
     def _run_one(self, audio: np.ndarray) -> dict:
         if audio.dtype != np.float32:
