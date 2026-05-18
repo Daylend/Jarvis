@@ -1,3 +1,4 @@
+import type { Client, VoiceBasedChannel } from 'discord.js';
 import { config } from '../config';
 import { transcriptStore } from './transcript-store';
 import type { SessionContext, AsrMessage } from './types';
@@ -13,6 +14,7 @@ function formatStamp(ms: number): string {
 export interface JarvisPayload {
   command: string;
   contextBlock: string;
+  memberList: string;
   ctx: SessionContext;
   ownerText: string;
   ownerStartMs: number;
@@ -21,6 +23,12 @@ export interface JarvisPayload {
 export type CommandHandler = (payload: JarvisPayload) => Promise<void>;
 
 class ActionRouter {
+  private client: Client | null = null;
+
+  setClient(client: Client): void {
+    this.client = client;
+  }
+
   /**
    * Pluggable handler — replace this to wire in llamacpp + TTS.
    * Default: log the payload to console.
@@ -107,13 +115,51 @@ class ActionRouter {
     const windowMs = config.jarvisContextSeconds * 1000;
     const rows = await transcriptStore.contextWindow(ctx.guildId, ctx.channelId, windowMs);
 
+    const nameMap = new Map<string, string>();
+    if (this.client) {
+      const guild = this.client.guilds.cache.get(ctx.guildId);
+      if (guild) {
+        const uniqueUserIds = [...new Set(rows.map((r: any) => r.userId as string))];
+        for (const uid of uniqueUserIds) {
+          const member = guild.members.cache.get(uid);
+          if (member) {
+            const display = member.displayName;
+            nameMap.set(uid, uid === config.ownerId ? `${display} (Owner)` : display);
+          }
+        }
+      }
+    }
+
     const contextBlock = rows
-      .map((r) => `[${formatStamp(r.startMs)}] <@${r.userId}>: ${r.textNormalized}`)
+      .map((r: any) => {
+        const name = nameMap.get(r.userId) ?? `<@${r.userId}>`;
+        return `[${formatStamp(r.startMs)}] ${name}: ${r.textNormalized}`;
+      })
       .join('\n');
+
+    let memberList = '';
+    if (this.client) {
+      try {
+        const guild = this.client.guilds.cache.get(ctx.guildId);
+        const channel = guild?.channels.cache.get(ctx.channelId);
+        if (channel && 'members' in channel) {
+          const voiceChannel = channel as VoiceBasedChannel;
+          const names = voiceChannel.members
+            .filter((m) => !m.user.bot)
+            .map((m) => m.id === config.ownerId ? `${m.displayName} (Owner)` : m.displayName);
+          if (names.length > 0) {
+            memberList = `Users currently in voice channel: ${names.join(', ')}`;
+          }
+        }
+      } catch (err) {
+        console.warn('[jarvis] Failed to build member list:', err);
+      }
+    }
 
     const payload: JarvisPayload = {
       command,
       contextBlock,
+      memberList,
       ctx,
       ownerText: msg.textNormalized,
       ownerStartMs: msg.startMs ?? 0,

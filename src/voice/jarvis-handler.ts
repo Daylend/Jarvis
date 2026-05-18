@@ -47,6 +47,10 @@ function buildUserPrompt(payload: JarvisPayload): string {
       prompt;
   }
 
+  if (payload.memberList) {
+    prompt = `${payload.memberList}\n\n` + prompt;
+  }
+
   return prompt;
 }
 

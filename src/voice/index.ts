@@ -20,6 +20,9 @@ export async function bootstrapVoice(client: Client): Promise<void> {
   // Load term aliases from DB (seeds from JSON if empty)
   await normalizer.load();
 
+  // Give action router access to the Discord client for display name resolution
+  actionRouter.setClient(client);
+
   // Wire Jarvis LLM handler
   actionRouter.setHandler(createJarvisHandler(client));
 
