@@ -5,6 +5,9 @@ import wave
 
 import numpy as np
 import torch
+import torchaudio
+
+torchaudio.set_audio_backend("soundfile")
 
 logger = logging.getLogger(__name__)
 
