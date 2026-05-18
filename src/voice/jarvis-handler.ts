@@ -5,7 +5,6 @@ import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
 import type { CommandHandler, JarvisPayload } from './action-router';
 
-const MAX_TOOL_LOOP = 5;
 const APPROVAL_TIMEOUT_MS = 30_000;
 const guildHistory = new Map<string, ChatMessage[]>();
 const guildLock = new Map<string, Promise<void>>();
@@ -159,9 +158,9 @@ export function createJarvisHandler(client: Client): CommandHandler {
       let toolDelivered = false;
       let iterCount = 0;
 
-      for (let iter = 0; iter < MAX_TOOL_LOOP; iter++) {
+      for (let iter = 0; iter < config.llmMaxToolLoop; iter++) {
         iterCount = iter + 1;
-        console.log(`[jarvis] LLM call iteration ${iterCount}/${MAX_TOOL_LOOP}`);
+        console.log(`[jarvis] LLM call iteration ${iterCount}/${config.llmMaxToolLoop}`);
 
         try {
           const response = await axios.post(

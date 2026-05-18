@@ -24,6 +24,7 @@ const envSchema = z.object({
   LLM_MAX_HISTORY: z.coerce.number().int().min(1).default(20),
   LLM_MAX_TOKENS: z.coerce.number().int().min(1).default(2048),
   LLM_CONTEXT_LENGTH: z.coerce.number().int().min(1).default(131072),
+  LLM_MAX_TOOL_LOOP: z.coerce.number().int().min(1).default(5),
   // TTS
   TTS_URL: z.string().url().default('http://tts:8860'),
   JARVIS_SYSTEM_PROMPT: z.string().default(
@@ -76,6 +77,7 @@ export const config = {
   llmMaxHistory: env.LLM_MAX_HISTORY,
   llmMaxTokens: env.LLM_MAX_TOKENS,
   llmContextLength: env.LLM_CONTEXT_LENGTH,
+  llmMaxToolLoop: env.LLM_MAX_TOOL_LOOP,
   jarvisSystemPrompt: env.JARVIS_SYSTEM_PROMPT,
   // TTS
   ttsUrl: env.TTS_URL,
