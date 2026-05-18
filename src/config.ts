@@ -21,6 +21,9 @@ const envSchema = z.object({
   EARLY_JARVIS_CUTOFF_MS: z.coerce.number().int().min(0).default(2000),
   // LLM
   LLAMA_CPP_URL: z.string().url().default('http://llama-cpp:8080/v1'),
+  LLM_MAX_HISTORY: z.coerce.number().int().min(1).default(20),
+  LLM_MAX_TOKENS: z.coerce.number().int().min(1).default(2048),
+  LLM_CONTEXT_LENGTH: z.coerce.number().int().min(1).default(131072),
   // TTS
   TTS_URL: z.string().url().default('http://tts:8860'),
   JARVIS_SYSTEM_PROMPT: z.string().default(
@@ -34,6 +37,13 @@ const envSchema = z.object({
     'for most responses.\n' +
     '- send_dm: Send a text message to the owner\'s DMs. Only use this for ' +
     'long responses, lists, code, structured data, or anything private/sensitive.\n\n' +
+    'You also have tools to search and retrieve past voice conversation records:\n' +
+    '- search_transcripts: Search past conversations by keyword. Start here for broad queries.\n' +
+    '- list_sessions: Browse recent voice sessions to find session IDs.\n' +
+    '- get_session_transcript: Read a session\'s transcript (supports time range filtering).\n' +
+    '- get_context_around: Zoom into the conversation around a specific moment.\n' +
+    'When asked about past conversations, use search_transcripts first, then drill into ' +
+    'specific sessions with get_session_transcript or get_context_around.\n\n' +
     'Keep spoken responses clean, concise, and natural-sounding. Do not use ' +
     'markdown, special characters, or formatting in spoken text. Respond in ' +
     'plain text suitable for text-to-speech synthesis. Your personality is subtle, ' +
@@ -63,6 +73,9 @@ export const config = {
   earlyJarvisCutoffMs: env.EARLY_JARVIS_CUTOFF_MS,
   // LLM
   llamaCppUrl: env.LLAMA_CPP_URL,
+  llmMaxHistory: env.LLM_MAX_HISTORY,
+  llmMaxTokens: env.LLM_MAX_TOKENS,
+  llmContextLength: env.LLM_CONTEXT_LENGTH,
   jarvisSystemPrompt: env.JARVIS_SYSTEM_PROMPT,
   // TTS
   ttsUrl: env.TTS_URL,

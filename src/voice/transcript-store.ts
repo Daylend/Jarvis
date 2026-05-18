@@ -77,4 +77,68 @@ export const transcriptStore = {
       orderBy: { createdAt: 'asc' },
     });
   },
+
+  /** List recent voice sessions in a guild, newest first, with transcript counts. */
+  async listSessions(guildId: string, limit = 10): Promise<any[]> {
+    return (prisma as any).voiceSession.findMany({
+      where: { guildId },
+      orderBy: { startedAt: 'desc' },
+      take: limit,
+      include: {
+        _count: { select: { transcripts: true } },
+      },
+    });
+  },
+
+  /** Get transcript lines around a specific offset within a session. */
+  async aroundOffset(
+    sessionId: string,
+    centerMs: number,
+    windowMs: number,
+  ): Promise<any[]> {
+    return (prisma as any).transcript.findMany({
+      where: {
+        sessionId,
+        startMs: {
+          gte: Math.max(0, centerMs - windowMs),
+          lte: centerMs + windowMs,
+        },
+      },
+      orderBy: { startMs: 'asc' },
+    });
+  },
+
+  /**
+   * Get transcript for a session with optional time-range filtering.
+   * If no sessionId is provided, uses the most recent session in the guild.
+   */
+  async sessionFiltered(
+    guildId: string,
+    sessionId?: string,
+    startOffsetMs?: number,
+    endOffsetMs?: number,
+    limit = 100,
+  ): Promise<{ session: any | null; rows: any[] }> {
+    const s = sessionId
+      ? await (prisma as any).voiceSession.findUnique({ where: { id: sessionId } })
+      : await (prisma as any).voiceSession.findFirst({
+          where: { guildId },
+          orderBy: { startedAt: 'desc' },
+        });
+    if (!s) return { session: null, rows: [] };
+
+    const where: any = { sessionId: s.id };
+    if (startOffsetMs !== undefined || endOffsetMs !== undefined) {
+      where.startMs = {};
+      if (startOffsetMs !== undefined) where.startMs.gte = startOffsetMs;
+      if (endOffsetMs !== undefined) where.startMs.lte = endOffsetMs;
+    }
+
+    const rows = await (prisma as any).transcript.findMany({
+      where,
+      orderBy: { startMs: 'asc' },
+      take: limit,
+    });
+    return { session: s, rows };
+  },
 };

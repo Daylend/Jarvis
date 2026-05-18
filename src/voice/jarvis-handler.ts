@@ -7,7 +7,6 @@ import type { CommandHandler, JarvisPayload } from './action-router';
 
 const MAX_TOOL_LOOP = 5;
 const APPROVAL_TIMEOUT_MS = 30_000;
-const MAX_HISTORY = 20;
 const guildHistory = new Map<string, ChatMessage[]>();
 const guildLock = new Map<string, Promise<void>>();
 
@@ -26,6 +25,25 @@ interface ChatMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+}
+
+/**
+ * Rough token estimate: ~4 chars per token for English text.
+ * Conservative enough to prevent context overflow without needing
+ * a real tokenizer. Tool call arguments count toward the estimate.
+ */
+function estimateTokens(messages: ChatMessage[]): number {
+  let totalChars = 0;
+  for (const m of messages) {
+    if (m.content) totalChars += m.content.length;
+    if (m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        totalChars += tc.function.name.length + tc.function.arguments.length;
+      }
+    }
+    totalChars += 16;
+  }
+  return Math.ceil(totalChars / 4);
 }
 
 function splitChunks(text: string, maxLen = 2000): string[] {
@@ -131,6 +149,12 @@ export function createJarvisHandler(client: Client): CommandHandler {
 
       console.log(`[jarvis] Dispatching to LLM — command: "${payload.command}"`);
 
+      const tokenBudget = config.llmContextLength - config.llmMaxTokens;
+      while (messages.length > 2 && estimateTokens(messages) > tokenBudget) {
+        const removed = messages.splice(1, 1);
+        console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateTokens(messages)} tokens, budget ${tokenBudget})`);
+      }
+
       let finalText: string | null = null;
       let toolDelivered = false;
       let iterCount = 0;
@@ -150,7 +174,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
               top_p: 0.8,
               top_k: 20,
               presence_penalty: 1.5,
-              max_tokens: 2048,
+              max_tokens: config.llmMaxTokens,
               chat_template_kwargs: {
                 enable_thinking: false,
               },
@@ -281,7 +305,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
       // Save new messages (user + assistant + tool) to guild history.
       // messages[0] = system prompt (skip), messages[1..history.length] = old history (skip)
       const newMessages = messages.slice(1 + history.length);
-      const updatedHistory = [...history, ...newMessages].slice(-MAX_HISTORY);
+      const updatedHistory = [...history, ...newMessages].slice(-config.llmMaxHistory);
       guildHistory.set(payload.ctx.guildId, updatedHistory);
 
       const elapsed = Math.round(performance.now() - t0);
