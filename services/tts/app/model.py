@@ -5,24 +5,15 @@ import wave
 
 import numpy as np
 import torch
-import torchaudio
 
 logger = logging.getLogger(__name__)
 
 MODEL = None
 VOCODER = None
-REF_SIGNAL = None
-REF_COND = None
+REF_AUDIO = None
+REF_TEXT = None
 DEVICE = None
 SAMPLE_RATE = None
-
-
-def _load_reference_audio(path: str, sr: int) -> torch.Tensor:
-    audio, file_sr = torchaudio.load(path)
-    audio = audio.mean(dim=0, keepdim=True)
-    if file_sr != sr:
-        audio = torchaudio.functional.resample(audio, file_sr, sr)
-    return audio
 
 
 def get_engine_info() -> dict:
@@ -46,7 +37,7 @@ def is_loaded() -> bool:
 
 
 def _ensure_loaded():
-    global MODEL, VOCODER, REF_SIGNAL, REF_COND, DEVICE, SAMPLE_RATE
+    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE
     if MODEL is not None:
         return
 
@@ -56,7 +47,6 @@ def _ensure_loaded():
         TTS_REF_TEXT,
         TTS_SAMPLE_RATE,
         TTS_VOCODER_NAME,
-        TTS_SPEED,
     )
 
     DEVICE = TTS_DEVICE
@@ -64,119 +54,77 @@ def _ensure_loaded():
 
     logger.info("Loading F5-TTS model to %s (vocoder=%s) ...", DEVICE, TTS_VOCODER_NAME)
 
-    from f5_tts.model import CFM, DiT
+    from cached_path import cached_path
+    from f5_tts.model import DiT
     from f5_tts.infer.utils_infer import (
         load_model,
         load_vocoder,
         preprocess_ref_audio_text,
     )
 
-    dtype = torch.float16 if DEVICE.startswith("cuda") else torch.float32
+    vocoder = load_vocoder(vocoder_name=TTS_VOCODER_NAME, device=DEVICE)
 
-    # Resolve vocabulary file (bundled with f5-tts package)
-    import importlib.util
-    import f5_tts
+    ckpt_path = str(cached_path("hf://SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors"))
 
-    vocab_file = None
-    pkg_origin = getattr(f5_tts, "__file__", None)
-    if pkg_origin is None:
-        spec = importlib.util.find_spec("f5_tts")
-        if spec and spec.origin:
-            pkg_origin = spec.origin
-
-    if pkg_origin is not None:
-        f5_tts_dir = os.path.dirname(pkg_origin)
-        candidate = os.path.join(
-            f5_tts_dir, "..", "data", "Emilia_ZH_EN_pinyin", "tokenizer.txt"
-        )
-        candidate = os.path.abspath(candidate)
-        if os.path.exists(candidate):
-            vocab_file = candidate
-
-    if vocab_file is None:
-        logger.warning(
-            "Could not locate f5-tts vocab file from package path; "
-            "falling back to load_model default resolution"
-        )
-
-    vocoder_local_path = f"checkpoints/{TTS_VOCODER_NAME}"
-
-    model = load_model(
-        dit_cls=DiT,
-        cfm_cls=CFM,
-        ckpt_path=None,
-        tokenizer="pinyin",
-        vocab_file=vocab_file,
-        vocoder_name=TTS_VOCODER_NAME,
-        vocoder_local_path=vocoder_local_path,
-        device=DEVICE,
-        dtype=dtype,
-        ode_method="euler",
-        use_ema=True,
+    model_cfg = dict(
+        dim=1024,
+        depth=22,
+        heads=16,
+        ff_mult=2,
+        text_dim=512,
+        text_mask_padding=True,
+        qk_norm=None,
+        conv_layers=4,
+        pe_attn_head=None,
+        attn_backend="torch",
+        attn_mask_enabled=False,
+        checkpoint_activations=False,
     )
 
-    vocoder = load_vocoder(
-        vocoder_name=TTS_VOCODER_NAME,
-        vocoder_local_path=vocoder_local_path,
+    model = load_model(
+        model_cls=DiT,
+        model_cfg=model_cfg,
+        ckpt_path=ckpt_path,
+        mel_spec_type=TTS_VOCODER_NAME,
+        vocab_file="",
         device=DEVICE,
     )
 
     MODEL = model
     VOCODER = vocoder
 
-    ref_audio = _load_reference_audio(TTS_REF_AUDIO, SAMPLE_RATE)
-    ref_text = TTS_REF_TEXT
-
-    ref_signal, ref_cond = preprocess_ref_audio_text(
-        model=MODEL,
-        ref_audio=ref_audio,
-        ref_text=ref_text,
-        tokenizer="pinyin",
-        device=DEVICE,
-        ref_audio_sr=SAMPLE_RATE,
+    ref_audio, ref_text = preprocess_ref_audio_text(
+        TTS_REF_AUDIO, TTS_REF_TEXT, show_info=logger.info
     )
+    REF_AUDIO = ref_audio
+    REF_TEXT = ref_text
 
-    REF_SIGNAL = ref_signal
-    REF_COND = ref_cond
-
-    logger.info(
-        "F5-TTS model loaded. ref_audio_dur=%.1fs, device=%s",
-        ref_audio.shape[-1] / SAMPLE_RATE,
-        DEVICE,
-    )
-
+    logger.info("F5-TTS model loaded. device=%s", DEVICE)
 
 def synthesize(text: str):
     import time as time_mod
 
     _ensure_loaded()
 
-    from app.config import TTS_CFG_STEPS, TTS_SWAY_SAMPLING_STEPS, TTS_SPEED
+    from app.config import TTS_CFG_STEPS, TTS_SPEED
     from f5_tts.infer.utils_infer import infer_process
 
     t0 = time_mod.perf_counter()
 
-    ref_signal = REF_SIGNAL.to(DEVICE)
-    ref_cond = REF_COND.to(DEVICE)
-
-    with torch.inference_mode():
-        wav, sr, _ = infer_process(
-            model=MODEL,
-            ref_signal=ref_signal,
-            ref_cond=ref_cond,
-            text=text,
-            vocoder=VOCODER,
-            speed=TTS_SPEED,
-            nfe_step=TTS_CFG_STEPS,
-            cfg_strength=2.0,
-            sway_sampling_coef=-1.0,
-            sway_sampling_steps=TTS_SWAY_SAMPLING_STEPS,
-            ode_method="euler",
-            use_ema=True,
-            device=DEVICE,
-        )
-
-    wav_np = wav.to(dtype=torch.float32).cpu().numpy().squeeze()
+    wav_np, sr, _ = infer_process(
+        ref_audio=REF_AUDIO,
+        ref_text=REF_TEXT,
+        gen_text=text,
+        model_obj=MODEL,
+        vocoder=VOCODER,
+        nfe_step=TTS_CFG_STEPS,
+        cfg_strength=2.0,
+        sway_sampling_coef=-1.0,
+        speed=TTS_SPEED,
+        show_info=logger.info,
+        progress=None,
+        device=DEVICE,
+    )
 
     duration_ms = (time_mod.perf_counter() - t0) * 1000
     audio_dur_s = len(wav_np) / sr
