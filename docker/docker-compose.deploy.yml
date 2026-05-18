@@ -3,8 +3,6 @@ services:
     image: registry.example.com/paxfax:latest
     container_name: paxfax
     restart: unless-stopped
-    env_file:
-      - stack.env
     volumes:
       - /mnt/user/appdata/paxfax/data:/app/data
       - /mnt/user/appdata/paxfax/logs:/app/logs
