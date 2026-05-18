@@ -7,10 +7,7 @@ class Normalizer {
   private loaded = false;
 
   async load(): Promise<void> {
-    const count = await prisma.termAlias.count();
-    if (count === 0) {
-      await this.seedFromJson();
-    }
+    await this.seedFromJson();
     const rows = await prisma.termAlias.findMany();
     this.rebuild(rows);
     this.loaded = true;
