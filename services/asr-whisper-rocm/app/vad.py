@@ -30,15 +30,23 @@ class VadState:
         self._min_silence_samples = int(settings.vad_min_silence_ms * settings.sample_rate / 1000)
         self._min_speech_samples = int(settings.vad_min_speech_ms * settings.sample_rate / 1000)
         self._max_utterance_samples = int(settings.max_utterance_s * settings.sample_rate)
+        self._remainder = np.empty(0, dtype=np.float32)
 
     def reset(self) -> None:
         self._in_speech = False
         self._speech_start_sample = 0
         self._last_speech_sample = 0
+        self._remainder = np.empty(0, dtype=np.float32)
         self._model.reset_states()
 
     def accept(self, audio: np.ndarray, absolute_start_sample: int) -> list[Segment]:
         segments: list[Segment] = []
+
+        if len(self._remainder) > 0:
+            absolute_start_sample -= len(self._remainder)
+            audio = np.concatenate([self._remainder, audio])
+            self._remainder = np.empty(0, dtype=np.float32)
+
         offset = 0
         remaining = len(audio)
 
@@ -55,6 +63,8 @@ class VadState:
                 if not self._in_speech:
                     self._in_speech = True
                     self._speech_start_sample = max(0, frame_start - self._pad_samples)
+                    logger.info("[vad %d] speech START at sample %d (prob=%.3f)",
+                                self.stream_id, frame_start, prob)
                 self._last_speech_sample = frame_end
 
             if self._in_speech:
@@ -66,14 +76,23 @@ class VadState:
                     if speech_duration >= self._min_speech_samples:
                         end = self._last_speech_sample + self._pad_samples
                         segments.append(Segment(self._speech_start_sample, end))
+                        logger.info("[vad %d] segment emitted: %d-%d (%.1fs)",
+                                    self.stream_id, self._speech_start_sample, end,
+                                    (end - self._speech_start_sample) / settings.sample_rate)
                     self._reset_speech()
 
                 elif duration_samples >= self._max_utterance_samples:
                     segments.append(Segment(self._speech_start_sample, frame_end))
+                    logger.info("[vad %d] max utt segment: %d-%d (%.1fs)",
+                                self.stream_id, self._speech_start_sample, frame_end,
+                                duration_samples / settings.sample_rate)
                     self._reset_speech()
 
             offset += FRAME_SIZE
             remaining -= FRAME_SIZE
+
+        if remaining > 0:
+            self._remainder = audio[offset:].copy()
 
         return segments
 

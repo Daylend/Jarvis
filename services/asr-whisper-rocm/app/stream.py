@@ -95,6 +95,10 @@ class StreamState:
         self.ring.append(audio)
         self.samples_seen += len(audio)
 
+        if self.samples_seen <= SAMPLE_RATE:
+            logger.info("[stream %d] accept_pcm: %d bytes -> %d samples (total: %d)",
+                        self.stream_id, len(pcm_bytes), len(audio), self.samples_seen)
+
         segments = self.vad.accept(audio, abs_start)
 
         events: list[dict] = []
