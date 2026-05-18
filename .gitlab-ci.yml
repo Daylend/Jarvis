@@ -15,6 +15,11 @@ variables:
   ASR_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:$CI_COMMIT_SHA
   ASR_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:latest
 
+  # Whisper ROCm ASR sidecar image
+  ASR_WHISPER_IMAGE_NAME: paxfax-asr-whisper-rocm
+  ASR_WHISPER_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:$CI_COMMIT_SHA
+  ASR_WHISPER_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:latest
+
   # Explicit build cache image in your own registry
   ASR_CACHE_IMAGE: registry.example.com/paxfax-asr-buildcache:main
 
@@ -80,6 +85,32 @@ build-asr:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - services/asr/**/*
+        - .gitlab-ci.yml
+      when: on_success
+  tags:
+    - docker
+
+# ── ASR Whisper ROCm Sidecar ───────────────────────────────────────────────────
+build-asr-whisper-rocm:
+  stage: build
+  image: docker:27.4.1-cli
+  services:
+    - name: docker:27.4.1-dind
+      alias: docker
+      command: ["--tls=false"]
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
+  script:
+    - echo "Building Whisper ROCm ASR Docker image..."
+    - docker build -t "$ASR_WHISPER_IMAGE" -t "$ASR_WHISPER_LATEST_IMAGE" -f services/asr-whisper-rocm/Dockerfile .
+    - echo "Pushing Whisper image to registry $DOCKER_REGISTRY"
+    - docker push "$ASR_WHISPER_IMAGE"
+    - docker push "$ASR_WHISPER_LATEST_IMAGE"
+    - echo "Successfully built and pushed $ASR_WHISPER_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - services/asr-whisper-rocm/**/*
         - .gitlab-ci.yml
       when: on_success
   tags:
