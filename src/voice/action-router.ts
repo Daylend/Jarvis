@@ -75,19 +75,27 @@ class ActionRouter {
     const idx = normalized.indexOf(trigger);
     if (idx < 0) return;
 
-    // Extract command text: everything after the trigger word
+    // Extract command text: try after the trigger word first, fall back to
+    // text before the trigger (end-of-sentence addressing like "What do you think Jarvis?")
     const after = msg.textNormalized
       .slice(idx + trigger.length)
       .replace(/^[\s,.;:!?-]+/, '')
       .trim();
 
-    if (!after) {
-      console.log(`[jarvis] Trigger detected but no command text followed. Ignoring.`);
+    const before = msg.textNormalized
+      .slice(0, idx)
+      .replace(/[\s,.;:!?-]+$/, '')
+      .trim();
+
+    const command = after || before;
+
+    if (!command) {
+      console.log(`[jarvis] Trigger detected but no command text found. Ignoring.`);
       return;
     }
 
-    console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId}`);
-    await this.dispatchJarvis(ctx, msg, after);
+    console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId} command="${command}"`);
+    await this.dispatchJarvis(ctx, msg, command);
   }
 
   /** Shared dispatch: fetches context window and invokes the handler. */
@@ -158,11 +166,19 @@ class ActionRouter {
     const idx = msg.textNormalized.toLowerCase().indexOf(trigger);
     if (idx < 0) return;
 
-    const tail = msg.textNormalized
+    let tail = msg.textNormalized
       .slice(idx + trigger.length)
       .replace(/^[\s,.;:!?-]+/, '')
       .trim();
-    const tailWords = tail.split(/\s+/).filter(Boolean);
+    let tailWords = tail.split(/\s+/).filter(Boolean);
+    if (tailWords.length < 2) {
+      // Fall back to text before the trigger (end-of-sentence addressing)
+      tail = msg.textNormalized
+        .slice(0, idx)
+        .replace(/[\s,.;:!?-]+$/, '')
+        .trim();
+      tailWords = tail.split(/\s+/).filter(Boolean);
+    }
     if (tailWords.length < 2) return;
 
     // --- Time-based cutoff with a real timer ---------------------------
