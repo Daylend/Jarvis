@@ -32,6 +32,7 @@ services:
         max-file: "5"
     networks:
       - deploy
+      - isolated
     depends_on:
       asr-whisper-rocm:
         condition: service_healthy
@@ -125,4 +126,6 @@ services:
 
 networks:
   deploy:
+    external: true
+  isolated:
     external: true

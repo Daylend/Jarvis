@@ -74,15 +74,30 @@ def _ensure_loaded():
     dtype = torch.float16 if DEVICE.startswith("cuda") else torch.float32
 
     # Resolve vocabulary file (bundled with f5-tts package)
+    import importlib.util
     import f5_tts
 
-    f5_tts_dir = os.path.dirname(f5_tts.__file__)
-    vocab_file = os.path.join(
-        f5_tts_dir, "..", "data", "Emilia_ZH_EN_pinyin", "tokenizer.txt"
-    )
-    vocab_file = os.path.abspath(vocab_file)
-    if not os.path.exists(vocab_file):
-        vocab_file = None  # let load_model resolve it
+    vocab_file = None
+    pkg_origin = getattr(f5_tts, "__file__", None)
+    if pkg_origin is None:
+        spec = importlib.util.find_spec("f5_tts")
+        if spec and spec.origin:
+            pkg_origin = spec.origin
+
+    if pkg_origin is not None:
+        f5_tts_dir = os.path.dirname(pkg_origin)
+        candidate = os.path.join(
+            f5_tts_dir, "..", "data", "Emilia_ZH_EN_pinyin", "tokenizer.txt"
+        )
+        candidate = os.path.abspath(candidate)
+        if os.path.exists(candidate):
+            vocab_file = candidate
+
+    if vocab_file is None:
+        logger.warning(
+            "Could not locate f5-tts vocab file from package path; "
+            "falling back to load_model default resolution"
+        )
 
     vocoder_local_path = f"checkpoints/{TTS_VOCODER_NAME}"
 
