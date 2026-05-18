@@ -14,13 +14,16 @@ class Settings(BaseModel):
     sample_rate: int = 16000
 
     vad_threshold: float = float(os.getenv("ASR_VAD_THRESHOLD", "0.50"))
-    vad_min_speech_ms: int = int(os.getenv("ASR_VAD_MIN_SPEECH_MS", "250"))
-    vad_min_silence_ms: int = int(os.getenv("ASR_VAD_MIN_SILENCE_MS", "800"))
+    vad_min_speech_ms: int = int(os.getenv("ASR_VAD_MIN_SPEECH_MS", "200"))
+    vad_min_silence_ms: int = int(os.getenv("ASR_VAD_MIN_SILENCE_MS", "500"))
     vad_speech_pad_ms: int = int(os.getenv("ASR_VAD_SPEECH_PAD_MS", "300"))
-    max_utterance_s: float = float(os.getenv("ASR_MAX_UTTERANCE_S", "24.0"))
+    max_utterance_s: float = float(os.getenv("ASR_MAX_UTTERANCE_S", "10.0"))
     min_final_audio_ms: int = int(os.getenv("ASR_MIN_FINAL_AUDIO_MS", "300"))
 
     inference_queue_max: int = int(os.getenv("ASR_INFERENCE_QUEUE_MAX", "64"))
+
+    endpoint_idle_ms: int = int(os.getenv("ASR_ENDPOINT_IDLE_MS", "1200"))
+    endpoint_silence_ms: int = int(os.getenv("ASR_ENDPOINT_SILENCE_MS", "600"))
 
     max_buffer_s: float = 32.0
 

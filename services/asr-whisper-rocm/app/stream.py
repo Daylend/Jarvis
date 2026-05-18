@@ -2,7 +2,8 @@
 from __future__ import annotations
 import asyncio
 import logging
-from typing import Optional
+import time
+from typing import Awaitable, Callable, Optional
 
 import numpy as np
 
@@ -76,20 +77,29 @@ class RingBuffer:
 
 
 class StreamState:
-    def __init__(self, stream_id: int, user_id: str):
+    def __init__(self, stream_id: int, user_id: str,
+                 send_cb: Callable[[dict], Awaitable[None]]):
         self.stream_id = stream_id
         self.user_id = user_id
         self.samples_seen: int = 0
         self.line_seq: int = 0
+        self._send_cb = send_cb
 
         max_samples = int(settings.max_buffer_s * SAMPLE_RATE)
         self.ring = RingBuffer(max_samples)
         self.vad = VadState(stream_id)
 
+        self._last_pcm_time: float = 0.0
+        self._watchdog_task: asyncio.Task | None = None
+        self._flush_injected: bool = False
+
     async def accept_pcm(self, pcm_bytes: bytes) -> list[dict]:
         audio = pcm_s16le_to_float32(pcm_bytes)
         if len(audio) == 0:
             return []
+
+        self._last_pcm_time = time.monotonic()
+        self._flush_injected = False
 
         abs_start = self.samples_seen
         self.ring.append(audio)
@@ -98,6 +108,9 @@ class StreamState:
         if self.samples_seen <= SAMPLE_RATE:
             logger.info("[stream %d] accept_pcm: %d bytes -> %d samples (total: %d)",
                         self.stream_id, len(pcm_bytes), len(audio), self.samples_seen)
+
+        if self._watchdog_task is None:
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
         segments = self.vad.accept(audio, abs_start)
 
@@ -110,11 +123,51 @@ class StreamState:
         return events
 
     async def flush(self) -> list[dict]:
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+            self._watchdog_task = None
         seg = self.vad.flush()
         if seg is None:
             return []
         event = await self._finalize_segment(seg)
         return [event] if event else []
+
+    async def _watchdog_loop(self) -> None:
+        idle_s = settings.endpoint_idle_ms / 1000.0
+        poll_s = min(idle_s / 4.0, 0.1)
+        try:
+            while True:
+                await asyncio.sleep(poll_s)
+                if self._last_pcm_time == 0.0:
+                    continue
+                elapsed = time.monotonic() - self._last_pcm_time
+                if elapsed >= idle_s and not self._flush_injected:
+                    self._flush_injected = True
+                    segments = self._inject_silence()
+                    if segments:
+                        logger.info(
+                            "[stream %d] endpoint flush: idle=%.0fms, injected %dms silence, got %d segment(s)",
+                            self.stream_id, elapsed * 1000,
+                            settings.endpoint_silence_ms, len(segments),
+                        )
+                    for seg in segments:
+                        event = await self._finalize_segment(seg)
+                        if event is not None:
+                            await self._send_cb(event)
+        except asyncio.CancelledError:
+            return
+
+    def _inject_silence(self) -> list[Segment]:
+        n_samples = int(settings.endpoint_silence_ms * SAMPLE_RATE / 1000)
+        silence = np.zeros(n_samples, dtype=np.float32)
+        abs_start = self.samples_seen
+        self.ring.append(silence)
+        self.samples_seen += n_samples
+        return self.vad.accept(silence, abs_start)
 
     async def _finalize_segment(self, seg: Segment) -> Optional[dict]:
         audio = self.ring.slice(seg.start_sample, seg.end_sample)
@@ -159,6 +212,9 @@ class StreamState:
 
         try:
             result = await asyncio.wait_for(fut, timeout=30.0)
+        except asyncio.CancelledError:
+            fut.cancel()
+            raise
         except asyncio.TimeoutError:
             logger.error("[stream %d] inference timeout for %s", self.stream_id, line_id)
             return None

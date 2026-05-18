@@ -86,7 +86,9 @@ class AsrSession:
                 return
             logger.info("[session %s] Opening stream %s for user %s",
                         self._session_id, stream_id, user_id)
-            self._streams[stream_id] = StreamState(stream_id=stream_id, user_id=user_id)
+            self._streams[stream_id] = StreamState(
+                stream_id=stream_id, user_id=user_id, send_cb=self._send_json,
+            )
 
         elif msg_type == "close":
             stream_id = msg.get("streamId")
