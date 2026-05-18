@@ -41,11 +41,39 @@ def get_current_voice() -> str | None:
     return CURRENT_VOICE
 
 
+def _transcript_path(audio_path: str) -> str:
+    base, _ = os.path.splitext(audio_path)
+    return base + ".txt"
+
+
+def _resolve_ref_text(audio_path: str, fallback_text: str) -> str:
+    tx_path = _transcript_path(audio_path)
+    if os.path.isfile(tx_path):
+        with open(tx_path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            logger.info("Using transcript from %s", tx_path)
+            return content
+    logger.info("No transcript file at %s, using TTS_REF_TEXT env", tx_path)
+    return fallback_text
+
+
 def set_ref_audio(path: str):
     global REF_AUDIO, REF_TEXT, CURRENT_VOICE
+    tx_path = _transcript_path(path)
+    if not os.path.isfile(tx_path):
+        raise FileNotFoundError(
+            f"Transcript file not found: {tx_path} — create a .txt file "
+            f"with the exact text spoken in the reference audio"
+        )
+    with open(tx_path, "r", encoding="utf-8") as f:
+        ref_text_content = f.read().strip()
+    if not ref_text_content:
+        raise ValueError(f"Transcript file is empty: {tx_path}")
+
     from f5_tts.infer.utils_infer import preprocess_ref_audio_text
     ref_audio, ref_text = preprocess_ref_audio_text(
-        path, "", show_info=logger.info
+        path, ref_text_content, show_info=logger.info
     )
     REF_AUDIO = ref_audio
     REF_TEXT = ref_text
@@ -111,7 +139,9 @@ def _ensure_loaded():
     VOCODER = vocoder
 
     ref_audio, ref_text = preprocess_ref_audio_text(
-        TTS_REF_AUDIO, TTS_REF_TEXT, show_info=logger.info
+        TTS_REF_AUDIO,
+        _resolve_ref_text(TTS_REF_AUDIO, TTS_REF_TEXT),
+        show_info=logger.info
     )
     REF_AUDIO = ref_audio
     REF_TEXT = ref_text

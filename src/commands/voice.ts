@@ -87,7 +87,9 @@ export const voiceCommand: Command = {
           { name },
           { headers: { 'Content-Type': 'application/json' }, timeout: 120_000 },
         );
-        await interaction.editReply(`Voice switched to **${res.data.voice}**.`);
+        await interaction.editReply(
+          `Voice switched to **${res.data.voice}**.\nTranscript: "${res.data.transcript}"`,
+        );
       } catch (err) {
         const msg = axios.isAxiosError(err) && err.response?.data?.detail
           ? err.response.data.detail

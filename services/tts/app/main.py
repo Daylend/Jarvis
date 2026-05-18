@@ -117,7 +117,7 @@ async def set_voice(req: VoiceRequest):
         logger.exception("Failed to switch voice to %s", req.name)
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"status": "ok", "voice": tts_model.get_current_voice()}
+    return {"status": "ok", "voice": tts_model.get_current_voice(), "transcript": tts_model.REF_TEXT}
 
 
 if __name__ == "__main__":
