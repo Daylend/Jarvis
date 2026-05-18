@@ -23,6 +23,19 @@ export const voiceCommand: Command = {
             .setRequired(true)
             .setAutocomplete(true),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('speed')
+        .setDescription('Get or set TTS speech speed (0.5–2.0)')
+        .addNumberOption((option) =>
+          option
+            .setName('value')
+            .setDescription('Speed multiplier (0.5 = slower, 2.0 = faster)')
+            .setMinValue(0.5)
+            .setMaxValue(2.0)
+            .setRequired(false),
+        ),
     ),
 
   autocomplete: async (interaction: AutocompleteInteraction) => {
@@ -95,6 +108,31 @@ export const voiceCommand: Command = {
           ? err.response.data.detail
           : (err as Error).message;
         await interaction.editReply(`Failed to set voice: ${msg}`);
+      }
+    }
+
+    if (sub === 'speed') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const value = interaction.options.getNumber('value');
+
+      try {
+        if (value !== null) {
+          const res = await axios.post(
+            `${config.ttsUrl}/speed`,
+            { speed: value },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 5000 },
+          );
+          await interaction.editReply(`Speed set to **${res.data.speed}x**.`);
+        } else {
+          const res = await axios.get(`${config.ttsUrl}/speed`, { timeout: 3000 });
+          await interaction.editReply(`Current speed: **${res.data.speed}x**.`);
+        }
+      } catch (err) {
+        const msg = axios.isAxiosError(err) && err.response?.data?.detail
+          ? err.response.data.detail
+          : (err as Error).message;
+        await interaction.editReply(`Failed to get/set speed: ${msg}`);
       }
     }
   },

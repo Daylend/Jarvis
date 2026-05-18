@@ -15,6 +15,7 @@ REF_TEXT = None
 CURRENT_VOICE = None
 DEVICE = None
 SAMPLE_RATE = None
+SPEED = 1.0
 
 
 def get_engine_info() -> dict:
@@ -39,6 +40,17 @@ def is_loaded() -> bool:
 
 def get_current_voice() -> str | None:
     return CURRENT_VOICE
+
+
+def get_speed() -> float:
+    return SPEED
+
+
+def set_speed(value: float) -> float:
+    global SPEED
+    SPEED = round(value, 2)
+    logger.info("TTS speed set to %s", SPEED)
+    return SPEED
 
 
 def _transcript_path(audio_path: str) -> str:
@@ -82,7 +94,7 @@ def set_ref_audio(path: str):
 
 
 def _ensure_loaded():
-    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE, CURRENT_VOICE
+    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE, CURRENT_VOICE, SPEED
     if MODEL is not None:
         return
 
@@ -91,11 +103,13 @@ def _ensure_loaded():
         TTS_REF_AUDIO,
         TTS_REF_TEXT,
         TTS_SAMPLE_RATE,
+        TTS_SPEED,
         TTS_VOCODER_NAME,
     )
 
     DEVICE = TTS_DEVICE
     SAMPLE_RATE = TTS_SAMPLE_RATE
+    SPEED = TTS_SPEED
 
     logger.info("Loading F5-TTS model to %s (vocoder=%s) ...", DEVICE, TTS_VOCODER_NAME)
 
@@ -154,7 +168,7 @@ def synthesize(text: str):
 
     _ensure_loaded()
 
-    from app.config import TTS_CFG_STEPS, TTS_SPEED
+    from app.config import TTS_CFG_STEPS
     from f5_tts.infer.utils_infer import infer_process
 
     t0 = time_mod.perf_counter()
@@ -168,7 +182,7 @@ def synthesize(text: str):
         nfe_step=TTS_CFG_STEPS,
         cfg_strength=2.0,
         sway_sampling_coef=-1.0,
-        speed=TTS_SPEED,
+        speed=SPEED,
         show_info=logger.info,
         progress=None,
         device=DEVICE,

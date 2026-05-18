@@ -30,6 +30,12 @@ class VoiceRequest(BaseModel):
     )
 
 
+class SpeedRequest(BaseModel):
+    speed: float = Field(
+        ..., ge=0.5, le=2.0, description="Speech speed multiplier (0.5–2.0)"
+    )
+
+
 @app.on_event("startup")
 async def startup():
     logger.info("Pre-loading F5-TTS model...")
@@ -118,6 +124,17 @@ async def set_voice(req: VoiceRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"status": "ok", "voice": tts_model.get_current_voice(), "transcript": tts_model.REF_TEXT}
+
+
+@app.get("/speed")
+async def get_speed():
+    return {"speed": tts_model.get_speed()}
+
+
+@app.post("/speed")
+async def set_speed(req: SpeedRequest):
+    new_speed = tts_model.set_speed(req.speed)
+    return {"speed": new_speed}
 
 
 if __name__ == "__main__":
