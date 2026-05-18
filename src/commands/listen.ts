@@ -2,6 +2,7 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from '
 import axios from 'axios';
 import { config } from '../config';
 import { sessionManager } from '../voice/session-manager';
+import { ttsClient } from '../voice/tts-client';
 import type { Command } from '../types';
 
 function ownerOnly(interaction: ChatInputCommandInteraction): boolean {
@@ -93,6 +94,7 @@ export const listenCommand: Command = {
 
       const ctx = sessionManager.get(interaction.guildId!);
       const health = await checkSidecarHealth();
+      const ttsHealth = await ttsClient.checkHealth();
 
       const embed = new EmbedBuilder()
         .setTitle('🎙️ Transcription Status')
@@ -108,6 +110,11 @@ export const listenCommand: Command = {
           {
             name: 'ASR Sidecar',
             value: health.ok ? `✅ Online — ${health.detail}` : `❌ Offline — ${health.detail}`,
+            inline: false,
+          },
+          {
+            name: 'TTS Sidecar',
+            value: ttsHealth.ok ? `✅ Online — ${ttsHealth.detail}` : `❌ Offline — ${ttsHealth.detail}`,
             inline: false,
           },
           {

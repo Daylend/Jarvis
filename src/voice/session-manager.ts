@@ -59,7 +59,7 @@ class SessionManager {
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: false,
-      selfMute: true, // bot doesn't speak yet
+      selfMute: false, // unmuted for TTS playback
     });
 
     // DEBUG: log every state transition so we can see what kills the connection
@@ -141,6 +141,9 @@ class SessionManager {
 
     perUserReceiver.detach(ctx);
     asrClient.closeForSession(ctx);
+
+    const { ttsClient } = await import('./tts-client');
+    ttsClient.removeGuild(guildId);
 
     try { ctx.connection.destroy(); } catch { /* ignore */ }
 

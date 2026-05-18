@@ -5,6 +5,7 @@ import { reactionsCommand } from './reactions';
 import { listenCommand } from './listen';
 import { transcriptsCommand } from './transcripts';
 import { termsCommand } from './terms';
+import { sayCommand } from './say';
 
 export const commands = [
   quotesCommand,
@@ -14,4 +15,5 @@ export const commands = [
   listenCommand,
   transcriptsCommand,
   termsCommand,
+  sayCommand,
 ];

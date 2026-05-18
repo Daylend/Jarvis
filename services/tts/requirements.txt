@@ -1,0 +1,9 @@
+fastapi
+pydantic
+uvicorn[standard]
+numpy
+torch
+torchaudio
+f5-tts
+soundfile
+x-transformers

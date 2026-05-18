@@ -52,7 +52,7 @@ toolRegistry.register({
     type: 'function',
     function: {
       name: 'send_dm',
-      description: 'Send a text response as a Discord direct message to the owner',
+      description: 'Send a text response as a Discord direct message to the owner. Only use for long responses, lists, code, structured data, or private/sensitive information.',
       parameters: {
         type: 'object',
         properties: {
@@ -69,5 +69,41 @@ toolRegistry.register({
       await user.send(text.slice(i, i + 2000));
     }
     return 'delivered';
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'speak_tts',
+      description: 'Speak a short response aloud in the voice channel using text-to-speech. Use this for short, conversational replies (1-3 sentences). This is the preferred method for most responses. Do NOT use for long text, code, lists, structured data, or private information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The text to speak aloud. Keep it concise and natural-sounding. Plain text only, no markdown or formatting.' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const text = args.text as string;
+    const { sessionManager } = await import('./session-manager');
+    const { ttsClient } = await import('./tts-client');
+
+    const ctx = sessionManager.get(context.guildId);
+    if (!ctx) {
+      return 'Error: no active voice session in this guild. Cannot speak.';
+    }
+
+    try {
+      await ttsClient.speak(ctx.connection, text, ctx.guildId);
+      return 'spoken';
+    } catch (err) {
+      const msg = (err as Error).message;
+      console.error(`[jarvis-tools] speak_tts error:`, msg);
+      return `TTS error: ${msg}`;
+    }
   },
 });

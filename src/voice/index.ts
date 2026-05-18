@@ -10,6 +10,7 @@ export { transcriptStore } from './transcript-store';
 export { actionRouter } from './action-router';
 export { registerOwnerWatch } from './owner-watch';
 export { startupAutoJoin } from './owner-watch';
+export { ttsClient } from './tts-client';
 
 /**
  * Bootstrap the voice subsystem.

@@ -24,6 +24,7 @@ services:
       - JARVIS_CONTEXT_SECONDS=${JARVIS_CONTEXT_SECONDS:-180}
       - VOICE_IDLE_TIMEOUT_SEC=${VOICE_IDLE_TIMEOUT_SEC:-900}
       - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://llama-cpp:8080/v1}
+      - TTS_URL=${TTS_URL:-http://tts:8860}
     logging:
       driver: "json-file"
       options:
@@ -33,6 +34,8 @@ services:
       - deploy
     depends_on:
       asr-whisper-rocm:
+        condition: service_healthy
+      tts:
         condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -70,6 +73,43 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - deploy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  tts:
+    image: registry.example.com/paxfax-tts:latest
+    container_name: paxfax-tts
+    restart: unless-stopped
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      - TTS_DEVICE=cuda:0
+      - TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+      - TTS_VOCODER_NAME=vocos
+      - HF_HOME=/models/hf
+      - TORCH_HOME=/models/torch
+    volumes:
+      - /mnt/user/appdata/paxfax/tts-models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8860/healthz"]
+      interval: 30s
       timeout: 10s
       retries: 5
       start_period: 300s

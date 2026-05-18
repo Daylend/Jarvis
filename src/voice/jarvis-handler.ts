@@ -199,7 +199,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
                 guildId: payload.ctx.guildId,
                 channelId: payload.ctx.channelId,
               });
-              if (toolName === 'send_dm') toolDelivered = true;
+              if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
               messages.push({
                 role: 'tool',
                 tool_call_id: tc.id,

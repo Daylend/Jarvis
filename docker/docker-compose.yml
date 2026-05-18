@@ -20,6 +20,32 @@ services:
       - JARVIS_CONTEXT_SECONDS=180
       - VOICE_IDLE_TIMEOUT_SEC=900
       - LLAMA_CPP_URL=http://llama-cpp:8080/v1
+      - TTS_URL=http://tts:8860
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  tts:
+    build:
+      context: ..
+      dockerfile: services/tts/Dockerfile
+    restart: unless-stopped
+    environment:
+      - TTS_DEVICE=cpu
+      - TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+      - TTS_VOCODER_NAME=vocos
+    volumes:
+      - ../data:/app/data
+    ports:
+      - "8860:8860"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8860/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     logging:
       driver: "json-file"
       options:

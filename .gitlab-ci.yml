@@ -20,6 +20,11 @@ variables:
   ASR_WHISPER_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:$CI_COMMIT_SHA
   ASR_WHISPER_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:latest
 
+  # TTS sidecar image
+  TTS_IMAGE_NAME: paxfax-tts
+  TTS_IMAGE: $DOCKER_REGISTRY/$TTS_IMAGE_NAME:$CI_COMMIT_SHA
+  TTS_LATEST_IMAGE: $DOCKER_REGISTRY/$TTS_IMAGE_NAME:latest
+
   # Explicit build cache image in your own registry
   ASR_CACHE_IMAGE: registry.example.com/paxfax-asr-buildcache:main
 
@@ -111,6 +116,32 @@ build-asr-whisper-rocm:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - services/asr-whisper-rocm/**/*
+        - .gitlab-ci.yml
+      when: on_success
+  tags:
+    - docker
+
+# ── TTS Sidecar ───────────────────────────────────────────────────────────────
+build-tts:
+  stage: build
+  image: docker:27.4.1-cli
+  services:
+    - name: docker:27.4.1-dind
+      alias: docker
+      command: ["--tls=false"]
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
+  script:
+    - echo "Building TTS Docker image..."
+    - docker build -t "$TTS_IMAGE" -t "$TTS_LATEST_IMAGE" -f services/tts/Dockerfile .
+    - echo "Pushing TTS image to registry $DOCKER_REGISTRY"
+    - docker push "$TTS_IMAGE"
+    - docker push "$TTS_LATEST_IMAGE"
+    - echo "Successfully built and pushed $TTS_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - services/tts/**/*
         - .gitlab-ci.yml
       when: on_success
   tags:
