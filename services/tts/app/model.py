@@ -12,6 +12,7 @@ MODEL = None
 VOCODER = None
 REF_AUDIO = None
 REF_TEXT = None
+CURRENT_VOICE = None
 DEVICE = None
 SAMPLE_RATE = None
 
@@ -36,8 +37,24 @@ def is_loaded() -> bool:
     return MODEL is not None
 
 
+def get_current_voice() -> str | None:
+    return CURRENT_VOICE
+
+
+def set_ref_audio(path: str):
+    global REF_AUDIO, REF_TEXT, CURRENT_VOICE
+    from f5_tts.infer.utils_infer import preprocess_ref_audio_text
+    ref_audio, ref_text = preprocess_ref_audio_text(
+        path, "", show_info=logger.info
+    )
+    REF_AUDIO = ref_audio
+    REF_TEXT = ref_text
+    CURRENT_VOICE = os.path.basename(path)
+    logger.info("Switched TTS reference voice to %s", CURRENT_VOICE)
+
+
 def _ensure_loaded():
-    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE
+    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE, CURRENT_VOICE
     if MODEL is not None:
         return
 
@@ -98,6 +115,7 @@ def _ensure_loaded():
     )
     REF_AUDIO = ref_audio
     REF_TEXT = ref_text
+    CURRENT_VOICE = os.path.basename(TTS_REF_AUDIO)
 
     logger.info("F5-TTS model loaded. device=%s", DEVICE)
 

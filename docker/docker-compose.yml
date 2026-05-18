@@ -38,6 +38,7 @@ services:
       - TTS_VOCODER_NAME=vocos
     volumes:
       - ../data:/app/data
+      - ../voice_samples:/app/voice_samples
     ports:
       - "8860:8860"
     healthcheck:

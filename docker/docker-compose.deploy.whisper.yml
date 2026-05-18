@@ -107,6 +107,7 @@ services:
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
     volumes:
+      - /mnt/user/appdata/paxfax/voice_samples:/app/voice_samples
       - /mnt/user/appdata/paxfax/tts-models:/models
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8860/healthz"]

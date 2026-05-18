@@ -24,6 +24,12 @@ class TtsRequest(BaseModel):
     )
 
 
+class VoiceRequest(BaseModel):
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Voice sample filename"
+    )
+
+
 @app.on_event("startup")
 async def startup():
     logger.info("Pre-loading F5-TTS model...")
@@ -72,6 +78,46 @@ async def tts(req: TtsRequest):
             "X-Text-Length": str(len(req.text)),
         },
     )
+
+
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus"}
+
+
+@app.get("/voices")
+async def list_voices():
+    voices_dir = "/app/voice_samples"
+    voices: list[str] = []
+    if os.path.isdir(voices_dir):
+        for entry in sorted(os.listdir(voices_dir)):
+            _, ext = os.path.splitext(entry)
+            if ext.lower() in AUDIO_EXTENSIONS:
+                voices.append(entry)
+    return {
+        "current": tts_model.get_current_voice(),
+        "voices": voices,
+    }
+
+
+@app.post("/voice")
+async def set_voice(req: VoiceRequest):
+    if not tts_model.is_loaded():
+        raise HTTPException(status_code=503, detail="Model not yet loaded")
+
+    voice_path = os.path.join("/app/voice_samples", req.name)
+    real = os.path.realpath(voice_path)
+    if not real.startswith(os.path.realpath("/app/voice_samples") + os.sep) and real != os.path.realpath("/app/voice_samples"):
+        raise HTTPException(status_code=400, detail="Invalid voice path")
+
+    if not os.path.isfile(real):
+        raise HTTPException(status_code=404, detail=f"Voice sample not found: {req.name}")
+
+    try:
+        tts_model.set_ref_audio(real)
+    except Exception as e:
+        logger.exception("Failed to switch voice to %s", req.name)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok", "voice": tts_model.get_current_voice()}
 
 
 if __name__ == "__main__":
