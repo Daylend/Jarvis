@@ -7,6 +7,13 @@ import type { CommandHandler, JarvisPayload } from './action-router';
 
 const MAX_TOOL_LOOP = 5;
 const APPROVAL_TIMEOUT_MS = 30_000;
+const MAX_HISTORY = 20;
+const guildHistory = new Map<string, ChatMessage[]>();
+
+/** Clear conversation history for a guild (call on session teardown). */
+export function clearGuildHistory(guildId: string): void {
+  guildHistory.delete(guildId);
+}
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -101,8 +108,10 @@ async function requestApproval(
 export function createJarvisHandler(client: Client): CommandHandler {
   return async (payload) => {
     const t0 = performance.now();
+    const history = guildHistory.get(payload.ctx.guildId) ?? [];
     const messages: ChatMessage[] = [
       { role: 'system', content: config.jarvisSystemPrompt },
+      ...history,
       { role: 'user', content: buildUserPrompt(payload) },
     ];
 
@@ -216,6 +225,10 @@ export function createJarvisHandler(client: Client): CommandHandler {
             }
           }
 
+          if (toolDelivered) {
+            console.log(`[jarvis] Tool delivered — stopping loop`);
+            break;
+          }
           continue;
         }
 
@@ -233,13 +246,23 @@ export function createJarvisHandler(client: Client): CommandHandler {
       } catch (err) {
         const errorMsg = (err as Error).message;
         console.error('[jarvis] LLM call failed:', errorMsg);
-        try {
-          const owner = await client.users.fetch(config.ownerId);
-          await owner.send('Jarvis: could not reach LLM');
-        } catch {} // eslint-disable-line no-empty
-        return;
+        if (!toolDelivered) {
+          try {
+            const owner = await client.users.fetch(config.ownerId);
+            await owner.send('Jarvis: could not reach LLM');
+          } catch {} // eslint-disable-line no-empty
+        } else {
+          console.log(`[jarvis] LLM call failed but tool already delivered — suppressing error DM`);
+        }
+        break;
       }
     }
+
+    // Save new messages (user + assistant + tool) to guild history.
+    // messages[0] = system prompt (skip), messages[1..history.length] = old history (skip)
+    const newMessages = messages.slice(1 + history.length);
+    const updatedHistory = [...history, ...newMessages].slice(-MAX_HISTORY);
+    guildHistory.set(payload.ctx.guildId, updatedHistory);
 
     const elapsed = Math.round(performance.now() - t0);
 
