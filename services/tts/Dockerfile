@@ -17,12 +17,13 @@ ENV NUMEXPR_NUM_THREADS=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg git ca-certificates curl \
+    libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/tts/requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r /app/requirements.txt \
-    && pip uninstall -y torchcodec
+    && pip install --force-reinstall --no-cache-dir "torchcodec==0.10.*"
 
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
