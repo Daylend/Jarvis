@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Client } from 'discord.js';
+import type { Client, Message, VoiceBasedChannel } from 'discord.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
@@ -24,6 +24,16 @@ interface ChatMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+}
+
+interface JarvisLoopOpts {
+  client: Client;
+  historyKey: string;
+  userPrompt: string;
+  guildId: string;
+  channelId: string;
+  replyFn: (text: string) => Promise<void>;
+  errorFn: (text: string) => Promise<void>;
 }
 
 /**
@@ -128,222 +138,340 @@ async function requestApproval(
   }
 }
 
+async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
+  const { client, historyKey, userPrompt, guildId, channelId, replyFn, errorFn } = opts;
+
+  const prev = guildLock.get(historyKey) ?? Promise.resolve();
+  let releaseLock: () => void;
+  const current = new Promise<void>((resolve) => { releaseLock = resolve; });
+  guildLock.set(historyKey, current);
+  await prev;
+
+  try {
+    const t0 = performance.now();
+    const history = guildHistory.get(historyKey) ?? [];
+    const messages: ChatMessage[] = [
+      { role: 'system', content: config.jarvisSystemPrompt },
+      ...history,
+      { role: 'user', content: userPrompt },
+    ];
+
+    console.log(`[jarvis] Dispatching to LLM (key=${historyKey}) — prompt: "${userPrompt.slice(0, 120)}..."`);
+
+    const tokenBudget = config.llmContextLength - config.llmMaxTokens;
+    while (messages.length > 2 && estimateTokens(messages) > tokenBudget) {
+      messages.splice(1, 1);
+      console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateTokens(messages)} tokens, budget ${tokenBudget})`);
+    }
+
+    let finalText: string | null = null;
+    let toolDelivered = false;
+    let iterCount = 0;
+
+    for (let iter = 0; iter < config.llmMaxToolLoop; iter++) {
+      iterCount = iter + 1;
+      console.log(`[jarvis] LLM call iteration ${iterCount}/${config.llmMaxToolLoop}`);
+
+      try {
+        const response = await axios.post(
+          `${config.llamaCppUrl}/chat/completions`,
+          {
+            model: 'local',
+            messages,
+            tools: toolRegistry.getAllDefinitions(),
+            temperature: 0.7,
+            top_p: 0.8,
+            top_k: 20,
+            presence_penalty: 1.5,
+            max_tokens: config.llmMaxTokens,
+            chat_template_kwargs: {
+              enable_thinking: false,
+            },
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30_000,
+          },
+        );
+
+        console.log(
+          `[jarvis] LLM HTTP ${response.status}, choices: ${response.data.choices?.length ?? 'none'}, raw: ${JSON.stringify(response.data).slice(0, 500)}`,
+        );
+
+        const choice = response.data.choices?.[0];
+        if (!choice) {
+          console.error('[jarvis] LLM response had no choices');
+          break;
+        }
+
+        const assistantMsg = choice.message as ChatMessage;
+        const sanitizedContent = sanitizeLlmContent(assistantMsg.content);
+        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
+
+        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+          messages.push(assistantMsg);
+
+          for (const tc of assistantMsg.tool_calls) {
+            const toolName = tc.function.name;
+            console.log(`[jarvis] LLM requested tool "${toolName}"`);
+
+            const tool = toolRegistry.get(toolName);
+            if (!tool) {
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: `Tool "${toolName}" not found`,
+              });
+              continue;
+            }
+
+            let args: Record<string, unknown>;
+            try {
+              args = JSON.parse(tc.function.arguments);
+            } catch {
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: 'Failed to parse tool arguments',
+              });
+              continue;
+            }
+
+            if (tool.requiresApproval) {
+              const approved = await requestApproval(
+                client,
+                config.ownerId,
+                toolName,
+                args,
+              );
+              if (!approved) {
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: tc.id,
+                  content: 'Tool call denied by user',
+                });
+                continue;
+              }
+            }
+
+            try {
+              const result = await tool.execute(args, {
+                client,
+                ownerId: config.ownerId,
+                guildId,
+                channelId,
+              });
+              if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: result,
+              });
+            } catch (err) {
+              const errorMsg = (err as Error).message;
+              console.error(`[jarvis] Tool "${toolName}" execution error:`, errorMsg);
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: `Tool error: ${errorMsg}`,
+              });
+            }
+          }
+
+          if (toolDelivered) {
+            console.log(`[jarvis] Tool delivered — stopping loop`);
+            break;
+          }
+          continue;
+        }
+
+        if (sanitizedContent) {
+          messages.push(assistantMsg);
+          finalText = sanitizedContent;
+          break;
+        }
+
+        if (choice.finish_reason === 'length') {
+          console.warn('[jarvis] LLM hit token limit — no output produced (try increasing max_tokens)');
+        }
+        console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg), 'finish_reason:', choice.finish_reason);
+        break;
+      } catch (err) {
+        const errorMsg = (err as Error).message;
+        console.error('[jarvis] LLM call failed:', errorMsg);
+        if (!toolDelivered) {
+          await errorFn('Jarvis: could not reach LLM').catch(() => {});
+        } else {
+          console.log(`[jarvis] LLM call failed but tool already delivered — suppressing error`);
+        }
+        break;
+      }
+    }
+
+    const newMessages = messages.slice(1 + history.length);
+    const updatedHistory = [...history, ...newMessages].slice(-config.llmMaxHistory);
+    guildHistory.set(historyKey, updatedHistory);
+
+    const elapsed = Math.round(performance.now() - t0);
+
+    if (finalText && !toolDelivered) {
+      console.log(`[jarvis] Response in ${elapsed}ms: "${finalText.slice(0, 120)}${finalText.length > 120 ? '...' : ''}"`);
+      try {
+        const chunks = splitChunks(finalText);
+        for (const chunk of chunks) {
+          await replyFn(chunk);
+        }
+        console.log(`[jarvis] Reply sent (${chunks.length} chunk(s))`);
+      } catch (err) {
+        console.error(`[jarvis] Failed to send reply: ${(err as Error).message}`);
+      }
+    } else if (toolDelivered) {
+      console.log(`[jarvis] Tool already delivered response (${elapsed}ms)`);
+    } else {
+      console.warn(`[jarvis] No final response after ${iterCount} iterations (${elapsed}ms)`);
+
+      if (messages.length > 0) {
+        const lastContent = messages
+          .filter((m) => m.role === 'assistant' && m.content)
+          .pop()?.content;
+
+        if (lastContent) {
+          try {
+            for (const chunk of splitChunks(lastContent)) {
+              await replyFn(chunk);
+            }
+          } catch {} // eslint-disable-line no-empty
+        }
+      }
+    }
+  } finally {
+    releaseLock!();
+  }
+}
+
 export function createJarvisHandler(client: Client): CommandHandler {
   return async (payload) => {
-    // Serialize LLM requests per guild — await any in-flight request before starting.
-    const prev = guildLock.get(payload.ctx.guildId) ?? Promise.resolve();
-    let releaseLock: () => void;
-    const current = new Promise<void>((resolve) => { releaseLock = resolve; });
-    guildLock.set(payload.ctx.guildId, current);
-    await prev;
+    const replyFn = async (text: string) => {
+      const owner = await client.users.fetch(config.ownerId);
+      await owner.send(text);
+    };
 
-    try {
-      const t0 = performance.now();
-      const history = guildHistory.get(payload.ctx.guildId) ?? [];
-      const messages: ChatMessage[] = [
-        { role: 'system', content: config.jarvisSystemPrompt },
-        ...history,
-        { role: 'user', content: buildUserPrompt(payload) },
-      ];
-
-      console.log(`[jarvis] Dispatching to LLM — command: "${payload.command}"`);
-
-      const tokenBudget = config.llmContextLength - config.llmMaxTokens;
-      while (messages.length > 2 && estimateTokens(messages) > tokenBudget) {
-        const removed = messages.splice(1, 1);
-        console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateTokens(messages)} tokens, budget ${tokenBudget})`);
-      }
-
-      let finalText: string | null = null;
-      let toolDelivered = false;
-      let iterCount = 0;
-
-      for (let iter = 0; iter < config.llmMaxToolLoop; iter++) {
-        iterCount = iter + 1;
-        console.log(`[jarvis] LLM call iteration ${iterCount}/${config.llmMaxToolLoop}`);
-
-        try {
-          const response = await axios.post(
-            `${config.llamaCppUrl}/chat/completions`,
-            {
-              model: 'local',
-              messages,
-              tools: toolRegistry.getAllDefinitions(),
-              temperature: 0.7,
-              top_p: 0.8,
-              top_k: 20,
-              presence_penalty: 1.5,
-              max_tokens: config.llmMaxTokens,
-              chat_template_kwargs: {
-                enable_thinking: false,
-              },
-            },
-            {
-              headers: { 'Content-Type': 'application/json' },
-              timeout: 30_000,
-            },
-          );
-
-          console.log(
-            `[jarvis] LLM HTTP ${response.status}, choices: ${response.data.choices?.length ?? 'none'}, raw: ${JSON.stringify(response.data).slice(0, 500)}`,
-          );
-
-          const choice = response.data.choices?.[0];
-          if (!choice) {
-            console.error('[jarvis] LLM response had no choices');
-            break;
-          }
-
-          const assistantMsg = choice.message as ChatMessage;
-          const sanitizedContent = sanitizeLlmContent(assistantMsg.content);
-          console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
-
-          if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-            messages.push(assistantMsg);
-
-            for (const tc of assistantMsg.tool_calls) {
-              const toolName = tc.function.name;
-              console.log(`[jarvis] LLM requested tool "${toolName}"`);
-
-              const tool = toolRegistry.get(toolName);
-              if (!tool) {
-                messages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  content: `Tool "${toolName}" not found`,
-                });
-                continue;
-              }
-
-              let args: Record<string, unknown>;
-              try {
-                args = JSON.parse(tc.function.arguments);
-              } catch {
-                messages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  content: 'Failed to parse tool arguments',
-                });
-                continue;
-              }
-
-              if (tool.requiresApproval) {
-                const approved = await requestApproval(
-                  client,
-                  config.ownerId,
-                  toolName,
-                  args,
-                );
-                if (!approved) {
-                  messages.push({
-                    role: 'tool',
-                    tool_call_id: tc.id,
-                    content: 'Tool call denied by user',
-                  });
-                  continue;
-                }
-              }
-
-              try {
-                const result = await tool.execute(args, {
-                  client,
-                  ownerId: config.ownerId,
-                  guildId: payload.ctx.guildId,
-                  channelId: payload.ctx.channelId,
-                });
-                if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
-                messages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  content: result,
-                });
-              } catch (err) {
-                const errorMsg = (err as Error).message;
-                console.error(`[jarvis] Tool "${toolName}" execution error:`, errorMsg);
-                messages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  content: `Tool error: ${errorMsg}`,
-                });
-              }
-            }
-
-            if (toolDelivered) {
-              console.log(`[jarvis] Tool delivered — stopping loop`);
-              break;
-            }
-            continue;
-          }
-
-          if (sanitizedContent) {
-            messages.push(assistantMsg);
-            finalText = sanitizedContent;
-            break;
-          }
-
-          if (choice.finish_reason === 'length') {
-            console.warn('[jarvis] LLM hit token limit — no output produced (try increasing max_tokens)');
-          }
-          console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg), 'finish_reason:', choice.finish_reason);
-          break;
-        } catch (err) {
-          const errorMsg = (err as Error).message;
-          console.error('[jarvis] LLM call failed:', errorMsg);
-          if (!toolDelivered) {
-            try {
-              const owner = await client.users.fetch(config.ownerId);
-              await owner.send('Jarvis: could not reach LLM');
-            } catch {} // eslint-disable-line no-empty
-          } else {
-            console.log(`[jarvis] LLM call failed but tool already delivered — suppressing error DM`);
-          }
-          break;
-        }
-      }
-
-      // Save new messages (user + assistant + tool) to guild history.
-      // messages[0] = system prompt (skip), messages[1..history.length] = old history (skip)
-      const newMessages = messages.slice(1 + history.length);
-      const updatedHistory = [...history, ...newMessages].slice(-config.llmMaxHistory);
-      guildHistory.set(payload.ctx.guildId, updatedHistory);
-
-      const elapsed = Math.round(performance.now() - t0);
-
-      if (finalText && !toolDelivered) {
-        console.log(`[jarvis] Response in ${elapsed}ms: "${finalText.slice(0, 120)}${finalText.length > 120 ? '...' : ''}"`);
-
-        try {
-          const owner = await client.users.fetch(config.ownerId);
-          const chunks = splitChunks(finalText);
-          for (const chunk of chunks) {
-            await owner.send(chunk);
-          }
-          console.log(`[jarvis] DM sent to owner (${chunks.length} chunk(s))`);
-        } catch (err) {
-          console.error(`[jarvis] Failed to DM owner: ${(err as Error).message}`);
-        }
-      } else if (toolDelivered) {
-        console.log(`[jarvis] Tool already delivered response (${elapsed}ms)`);
-      } else {
-        console.warn(`[jarvis] No final response after ${iterCount} iterations (${elapsed}ms)`);
-
-        if (messages.length > 0) {
-          const lastContent = messages
-            .filter((m) => m.role === 'assistant' && m.content)
-            .pop()?.content;
-
-          if (lastContent) {
-            try {
-              const owner = await client.users.fetch(config.ownerId);
-              for (const chunk of splitChunks(lastContent)) {
-                await owner.send(chunk);
-              }
-            } catch {} // eslint-disable-line no-empty
-          }
-        }
-      }
-    } finally {
-      releaseLock!();
-    }
+    await runJarvisLoop({
+      client,
+      historyKey: payload.ctx.guildId,
+      userPrompt: buildUserPrompt(payload),
+      guildId: payload.ctx.guildId,
+      channelId: payload.ctx.channelId,
+      replyFn,
+      errorFn: replyFn,
+    });
   };
+}
+
+/**
+ * Handle a DM from the owner through the Jarvis pipeline.
+ * Uses the same LLM loop, tools, and system prompt as voice commands.
+ * If the owner has an active voice session, includes recent voice context.
+ */
+export async function handleDmJarvis(client: Client, message: Message): Promise<void> {
+  const historyKey = `dm:${config.ownerId}`;
+  const command = message.content.trim();
+
+  if (!command) return;
+
+  const channel = message.channel as any;
+  await channel.sendTyping().catch(() => {});
+
+  const { sessionManager } = await import('./session-manager');
+  const { transcriptStore } = await import('./transcript-store');
+
+  let guildId = '';
+  let channelId = '';
+  let contextBlock = '';
+  let memberList = '';
+
+  for (const [gId] of client.guilds.cache) {
+    const ctx = sessionManager.get(gId);
+    if (ctx) {
+      guildId = ctx.guildId;
+      channelId = ctx.channelId;
+
+      try {
+        const windowMs = config.jarvisContextSeconds * 1000;
+        const rows = await transcriptStore.contextWindow(guildId, channelId, windowMs);
+
+        const guild = client.guilds.cache.get(guildId);
+
+        if (rows.length > 0) {
+          const nameMap = new Map<string, string>();
+          if (guild) {
+            const uniqueUserIds = [...new Set(rows.map((r: any) => r.userId as string))];
+            for (const uid of uniqueUserIds) {
+              const member = guild.members.cache.get(uid);
+              if (member) {
+                nameMap.set(uid, uid === config.ownerId ? `${member.displayName} (Owner)` : member.displayName);
+              }
+            }
+          }
+
+          const formatStamp = (ms: number) => {
+            const totalSec = Math.floor(ms / 1000);
+            const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
+            const s = (totalSec % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+          };
+
+          contextBlock = rows
+            .map((r: any) => {
+              const name = nameMap.get(r.userId) ?? `<@${r.userId}>`;
+              return `[${formatStamp(r.startMs)}] ${name}: ${r.textNormalized}`;
+            })
+            .join('\n');
+        }
+
+        const channel = guild?.channels.cache.get(channelId);
+        if (channel && 'members' in channel) {
+          const voiceChannel = channel as VoiceBasedChannel;
+          const names = voiceChannel.members
+            .filter((m) => !m.user.bot)
+            .map((m) => m.id === config.ownerId ? `${m.displayName} (Owner)` : m.displayName);
+          if (names.length > 0) {
+            memberList = `Users currently in voice channel: ${names.join(', ')}`;
+          }
+        }
+      } catch (err) {
+        console.warn('[dm-jarvis] Failed to pull voice context:', err);
+      }
+
+      break;
+    }
+  }
+
+  let userPrompt = `Owner's message (via DM): ${command}`;
+
+  if (contextBlock) {
+    const ctxSec = config.jarvisContextSeconds;
+    userPrompt =
+      `Voice chat context (last ${ctxSec}s):\n` +
+      `${contextBlock}\n\n` +
+      userPrompt;
+  }
+
+  if (memberList) {
+    userPrompt = `${memberList}\n\n` + userPrompt;
+  }
+
+  const replyFn = async (text: string) => {
+    await channel.send(text);
+  };
+
+  await runJarvisLoop({
+    client,
+    historyKey,
+    userPrompt,
+    guildId,
+    channelId,
+    replyFn,
+    errorFn: replyFn,
+  });
 }

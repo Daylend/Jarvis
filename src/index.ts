@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, Collection, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Collection, Message, Partials } from 'discord.js';
 import { config } from './config';
 import { commands } from './commands';
 import { prisma } from './db';
@@ -6,7 +6,7 @@ import { angryResponses } from './angry-responses';
 import { getContext, setContext } from './ai-context';
 import { getChannelUnlock } from './channel-lock';
 import { resolveMentions } from './utils';
-import { bootstrapVoice, sessionManager } from './voice';
+import { bootstrapVoice, sessionManager, handleDmJarvis } from './voice';
 import axios from 'axios';
 
 const client = new Client({
@@ -16,7 +16,9 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.DirectMessages,
   ],
+  partials: [Partials.Channel],
 });
 
 const commandMap = new Collection<string, any>();
@@ -61,6 +63,17 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
+
+  // DM from owner → Jarvis pipeline
+  if (!message.guild && message.author.id === config.ownerId) {
+    try {
+      await handleDmJarvis(client, message);
+    } catch (err) {
+      console.error('[dm-jarvis] Error handling owner DM:', err);
+      await (message.channel as any).send('Something went wrong processing your message.').catch(() => {});
+    }
+    return;
+  }
 
   // AI Reply Logic
   if (message.reference && message.reference.messageId) {

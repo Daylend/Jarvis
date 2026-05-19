@@ -1,7 +1,7 @@
 import type { Client } from 'discord.js';
 import { normalizer } from './normalizer';
 import { actionRouter } from './action-router';
-import { createJarvisHandler } from './jarvis-handler';
+import { createJarvisHandler, handleDmJarvis } from './jarvis-handler';
 import { registerOwnerWatch, startupAutoJoin } from './owner-watch';
 
 export { sessionManager } from './session-manager';
@@ -11,6 +11,7 @@ export { actionRouter } from './action-router';
 export { registerOwnerWatch } from './owner-watch';
 export { startupAutoJoin } from './owner-watch';
 export { ttsClient } from './tts-client';
+export { handleDmJarvis } from './jarvis-handler';
 
 /**
  * Bootstrap the voice subsystem.
