@@ -29,7 +29,8 @@ interface ChatMessage {
 interface JarvisLoopOpts {
   client: Client;
   historyKey: string;
-  userPrompt: string;
+  command: string;
+  contextPreamble: string | null;
   guildId: string;
   channelId: string;
   replyFn: (text: string) => Promise<void>;
@@ -63,22 +64,31 @@ function splitChunks(text: string, maxLen = 2000): string[] {
   return chunks;
 }
 
-function buildUserPrompt(payload: JarvisPayload): string {
-  let prompt = `Owner's command: ${payload.command}`;
+interface BuiltPrompt {
+  command: string;
+  contextPreamble: string | null;
+}
+
+function buildUserPrompt(payload: JarvisPayload): BuiltPrompt {
+  const command = `Owner's command: ${payload.command}`;
+
+  let contextPreamble: string | null = null;
+  const parts: string[] = [];
+
+  if (payload.memberList) {
+    parts.push(payload.memberList);
+  }
 
   if (payload.contextBlock) {
     const ctxSec = config.jarvisContextSeconds;
-    prompt =
-      `Voice chat context (last ${ctxSec}s):\n` +
-      `${payload.contextBlock}\n\n` +
-      prompt;
+    parts.push(`Voice chat context (last ${ctxSec}s):\n${payload.contextBlock}`);
   }
 
-  if (payload.memberList) {
-    prompt = `${payload.memberList}\n\n` + prompt;
+  if (parts.length > 0) {
+    contextPreamble = parts.join('\n\n');
   }
 
-  return prompt;
+  return { command, contextPreamble };
 }
 
 function sanitizeLlmContent(raw: string | null): string | null {
@@ -139,7 +149,7 @@ async function requestApproval(
 }
 
 async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
-  const { client, historyKey, userPrompt, guildId, channelId, replyFn, errorFn } = opts;
+  const { client, historyKey, command, contextPreamble, guildId, channelId, replyFn, errorFn } = opts;
 
   const prev = guildLock.get(historyKey) ?? Promise.resolve();
   let releaseLock: () => void;
@@ -150,19 +160,37 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
   try {
     const t0 = performance.now();
     const history = guildHistory.get(historyKey) ?? [];
+
+    const tokenBudget = config.llmContextLength - config.llmMaxTokens;
+    const estimateCurrentSize = (): number => {
+      const preview: ChatMessage[] = [
+        { role: 'system', content: config.jarvisSystemPrompt },
+        ...history,
+      ];
+      if (contextPreamble) {
+        preview.push({ role: 'user', content: `[Voice Channel Context]\n${contextPreamble}` });
+      }
+      preview.push({ role: 'user', content: command });
+      return estimateTokens(preview);
+    };
+    while (history.length > 0 && estimateCurrentSize() > tokenBudget) {
+      history.shift();
+      console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateCurrentSize()} tokens, budget ${tokenBudget})`);
+    }
+
     const messages: ChatMessage[] = [
       { role: 'system', content: config.jarvisSystemPrompt },
       ...history,
-      { role: 'user', content: userPrompt },
     ];
 
-    console.log(`[jarvis] Dispatching to LLM (key=${historyKey}) — prompt: "${userPrompt.slice(0, 120)}..."`);
-
-    const tokenBudget = config.llmContextLength - config.llmMaxTokens;
-    while (messages.length > 2 && estimateTokens(messages) > tokenBudget) {
-      messages.splice(1, 1);
-      console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateTokens(messages)} tokens, budget ${tokenBudget})`);
+    if (contextPreamble) {
+      messages.push({ role: 'user', content: `[Voice Channel Context]\n${contextPreamble}` });
     }
+
+    const historyStart = messages.length;
+    messages.push({ role: 'user', content: command });
+
+    console.log(`[jarvis] Dispatching to LLM (key=${historyKey}) — prompt: "${command.slice(0, 120)}..."`);
 
     let finalText: string | null = null;
     let toolDelivered = false;
@@ -308,7 +336,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       }
     }
 
-    const newMessages = messages.slice(1 + history.length);
+    const newMessages = messages.slice(historyStart);
     const updatedHistory = [...history, ...newMessages].slice(-config.llmMaxHistory);
     guildHistory.set(historyKey, updatedHistory);
 
@@ -356,10 +384,13 @@ export function createJarvisHandler(client: Client): CommandHandler {
       await owner.send(text);
     };
 
+    const { command, contextPreamble } = buildUserPrompt(payload);
+
     await runJarvisLoop({
       client,
       historyKey: payload.ctx.guildId,
-      userPrompt: buildUserPrompt(payload),
+      command,
+      contextPreamble,
       guildId: payload.ctx.guildId,
       channelId: payload.ctx.channelId,
       replyFn,
@@ -447,18 +478,19 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
     }
   }
 
-  let userPrompt = `Owner's message (via DM): ${command}`;
+  const dmCommand = `Owner's message (via DM): ${command}`;
 
+  let contextPreamble: string | null = null;
+  const ctxParts: string[] = [];
+  if (memberList) {
+    ctxParts.push(memberList);
+  }
   if (contextBlock) {
     const ctxSec = config.jarvisContextSeconds;
-    userPrompt =
-      `Voice chat context (last ${ctxSec}s):\n` +
-      `${contextBlock}\n\n` +
-      userPrompt;
+    ctxParts.push(`Voice chat context (last ${ctxSec}s):\n${contextBlock}`);
   }
-
-  if (memberList) {
-    userPrompt = `${memberList}\n\n` + userPrompt;
+  if (ctxParts.length > 0) {
+    contextPreamble = ctxParts.join('\n\n');
   }
 
   const replyFn = async (text: string) => {
@@ -468,7 +500,8 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
   await runJarvisLoop({
     client,
     historyKey,
-    userPrompt,
+    command: dmCommand,
+    contextPreamble,
     guildId,
     channelId,
     replyFn,
