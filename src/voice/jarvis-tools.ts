@@ -19,6 +19,7 @@ export interface ToolContext {
   ownerId: string;
   guildId: string;
   channelId: string;
+  clearHistory?: () => void;
 }
 
 class ToolRegistry {
@@ -315,5 +316,28 @@ toolRegistry.register({
       result = result.slice(0, 3000) + `\n\n... (truncated, ${rows.length} total lines. Try a smaller window_minutes.)`;
     }
     return result;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'clear_memory',
+      description:
+        'Clear your conversation memory and start fresh. Use when the owner asks you to forget, reset, or wipe context. This does NOT delete stored transcripts — only your current conversation context.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  async execute(_args, context) {
+    if (context.clearHistory) {
+      context.clearHistory();
+      return 'Memory cleared. Starting fresh.';
+    }
+    return 'Memory clear not available in this context.';
   },
 });

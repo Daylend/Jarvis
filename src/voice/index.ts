@@ -12,6 +12,7 @@ export { registerOwnerWatch } from './owner-watch';
 export { startupAutoJoin } from './owner-watch';
 export { ttsClient } from './tts-client';
 export { handleDmJarvis } from './jarvis-handler';
+export { clearAllHistory } from './jarvis-handler';
 
 /**
  * Bootstrap the voice subsystem.

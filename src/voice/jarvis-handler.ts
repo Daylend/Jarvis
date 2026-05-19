@@ -15,6 +15,12 @@ export function clearGuildHistory(guildId: string): void {
   guildLock.delete(guildId);
 }
 
+/** Clear ALL Jarvis conversation history (all guilds + DMs). */
+export function clearAllHistory(): void {
+  guildHistory.clear();
+  guildLock.clear();
+}
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -207,10 +213,13 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             model: 'local',
             messages,
             tools: toolRegistry.getAllDefinitions(),
-            temperature: 0.7,
-            top_p: 0.8,
+            temperature: 0.5,
+            top_p: 0.90,
+            min_p: 0.0,
             top_k: 20,
-            presence_penalty: 1.5,
+            presence_penalty: 0.0,
+            frequency_penalty: 0.0,
+            repeat_penalty: 1.0,
             max_tokens: config.llmMaxTokens,
             chat_template_kwargs: {
               enable_thinking: false,
@@ -288,6 +297,11 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                 ownerId: config.ownerId,
                 guildId,
                 channelId,
+                clearHistory: () => {
+                  history.length = 0;
+                  guildHistory.delete(historyKey);
+                  guildLock.delete(historyKey);
+                },
               });
               if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
               messages.push({

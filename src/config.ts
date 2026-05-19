@@ -43,6 +43,7 @@ const envSchema = z.object({
     '- list_sessions: Browse recent voice sessions to find session IDs.\n' +
     '- get_session_transcript: Read a session\'s transcript (supports time range filtering).\n' +
     '- get_context_around: Zoom into the conversation around a specific moment.\n' +
+    '- clear_memory: Wipe your conversation history and start fresh. Use when asked to forget or reset.\n' +
     'When asked about past conversations, use search_transcripts first, then drill into ' +
     'specific sessions with get_session_transcript or get_context_around.\n\n' +
     'Keep spoken responses clean, concise, and natural-sounding. Do not use ' +
