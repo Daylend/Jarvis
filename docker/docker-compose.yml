@@ -20,6 +20,10 @@ services:
       - JARVIS_CONTEXT_SECONDS=180
       - VOICE_IDLE_TIMEOUT_SEC=900
       - LLAMA_CPP_URL=http://llama-cpp:8080/v1
+      - LLM_MAX_HISTORY=${LLM_MAX_HISTORY:-20}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
+      - LLM_CONTEXT_LENGTH=${LLM_CONTEXT_LENGTH:-131072}
+      - LLM_MAX_TOOL_LOOP=${LLM_MAX_TOOL_LOOP:-20}
       - TTS_URL=http://tts:8860
     logging:
       driver: "json-file"
