@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import wave
@@ -16,6 +17,37 @@ CURRENT_VOICE = None
 DEVICE = None
 SAMPLE_RATE = None
 SPEED = 1.0
+
+
+def _save_settings():
+    from app.config import TTS_SETTINGS_PATH
+    settings = {"voice": CURRENT_VOICE, "speed": SPEED}
+    try:
+        with open(TTS_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f)
+        logger.info("Saved TTS settings to %s: %s", TTS_SETTINGS_PATH, settings)
+    except Exception:
+        logger.exception("Failed to save TTS settings to %s", TTS_SETTINGS_PATH)
+
+
+def _load_saved_settings():
+    from app.config import TTS_SETTINGS_PATH
+    try:
+        with open(TTS_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        voice = settings.get("voice")
+        speed = settings.get("speed")
+        if not isinstance(voice, str) or not isinstance(speed, (int, float)):
+            logger.warning("Invalid TTS settings format in %s, ignoring", TTS_SETTINGS_PATH)
+            return None
+        logger.info("Loaded TTS settings from %s: voice=%s speed=%s", TTS_SETTINGS_PATH, voice, speed)
+        return settings
+    except FileNotFoundError:
+        logger.info("No saved TTS settings at %s, using defaults", TTS_SETTINGS_PATH)
+        return None
+    except Exception:
+        logger.exception("Failed to load TTS settings from %s", TTS_SETTINGS_PATH)
+        return None
 
 
 def get_engine_info() -> dict:
@@ -50,6 +82,7 @@ def set_speed(value: float) -> float:
     global SPEED
     SPEED = round(value, 2)
     logger.info("TTS speed set to %s", SPEED)
+    _save_settings()
     return SPEED
 
 
@@ -91,6 +124,7 @@ def set_ref_audio(path: str):
     REF_TEXT = ref_text
     CURRENT_VOICE = os.path.basename(path)
     logger.info("Switched TTS reference voice to %s", CURRENT_VOICE)
+    _save_settings()
 
 
 def _ensure_loaded():
@@ -160,6 +194,22 @@ def _ensure_loaded():
     REF_AUDIO = ref_audio
     REF_TEXT = ref_text
     CURRENT_VOICE = os.path.basename(TTS_REF_AUDIO)
+
+    saved = _load_saved_settings()
+    if saved:
+        saved_voice = saved.get("voice")
+        if saved_voice:
+            voice_path = os.path.join("/app/voice_samples", saved_voice)
+            if os.path.isfile(voice_path):
+                try:
+                    set_ref_audio(voice_path)
+                except Exception:
+                    logger.exception("Failed to restore saved voice %s, keeping default", saved_voice)
+            else:
+                logger.warning("Saved voice file not found: %s, keeping default", voice_path)
+        saved_speed = saved.get("speed")
+        if saved_speed is not None:
+            set_speed(float(saved_speed))
 
     logger.info("F5-TTS model loaded. device=%s", DEVICE)
 
