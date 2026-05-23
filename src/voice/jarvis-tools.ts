@@ -110,13 +110,23 @@ toolRegistry.register({
   },
 });
 
+function parseDate(s: string | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatDt(d: Date): string {
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 toolRegistry.register({
   definition: {
     type: 'function',
     function: {
       name: 'search_transcripts',
       description:
-        'Search past voice chat transcripts by keyword. Returns matching lines with session IDs and timestamps for drilling into specific conversations.',
+        'Search past voice chat transcripts by keyword. Returns matching lines with transcript IDs, session IDs, and timestamps. Use the returned transcript IDs with get_transcripts to read surrounding conversation.',
       parameters: {
         type: 'object',
         properties: {
@@ -124,9 +134,25 @@ toolRegistry.register({
             type: 'string',
             description: 'The search term to look for in transcripts',
           },
+          user_id: {
+            type: 'string',
+            description: 'Filter results to a specific Discord user ID',
+          },
+          session_id: {
+            type: 'string',
+            description: 'Filter results to a specific voice session ID',
+          },
+          after: {
+            type: 'string',
+            description: 'Only include results from after this ISO datetime (e.g. "2025-01-15T14:00:00Z" or "2025-01-15")',
+          },
+          before: {
+            type: 'string',
+            description: 'Only include results from before this ISO datetime',
+          },
           limit: {
             type: 'number',
-            description: 'Max results to return (default 25, max 50)',
+            description: 'Max results to return (default 10, max 50)',
           },
         },
         required: ['query'],
@@ -135,23 +161,43 @@ toolRegistry.register({
   },
   async execute(args, context) {
     const query = args.query as string;
-    const limit = Math.min((args.limit as number) || 25, 50);
+    const userId = args.user_id as string | undefined;
+    const sessionId = args.session_id as string | undefined;
+    const limit = Math.min((args.limit as number) || 10, 50);
 
-    const rows = await transcriptStore.search(context.guildId, query, limit);
+    const after = parseDate(args.after as string | undefined);
+    const before = parseDate(args.before as string | undefined);
+    if ((args.after && !after) || (args.before && !before)) {
+      return 'Invalid date format. Use ISO datetime, e.g. "2025-01-15T14:00:00Z" or "2025-01-15".';
+    }
+    if (after && before && after > before) {
+      return 'Invalid time range: after is later than before.';
+    }
+
+    const rows = await transcriptStore.search({
+      guildId: context.guildId,
+      query,
+      userId,
+      sessionId,
+      after: after ?? undefined,
+      before: before ?? undefined,
+      limit,
+    });
+
     if (rows.length === 0) return `No transcripts found matching "${query}".`;
 
     const results = rows.map((r: any) => ({
+      id: r.id,
       sessionId: r.sessionId,
-      timestamp: r.createdAt?.toISOString?.() ?? 'unknown',
       userId: r.userId,
-      startMs: r.startMs,
+      timestamp: formatDt(r.createdAt),
       text: r.textNormalized,
     }));
 
     const json = JSON.stringify(results, null, 2);
     if (json.length > 3000) {
       const truncated = JSON.stringify(results.slice(0, 10), null, 2);
-      return truncated + `\n\n... (${rows.length} total results, showing first 10. Refine your search for more specific results.)`;
+      return truncated + `\n\n... (${rows.length} total results, showing first 10. Narrow your search with filters.)`;
     }
     return json;
   },
@@ -198,27 +244,39 @@ toolRegistry.register({
   definition: {
     type: 'function',
     function: {
-      name: 'get_session_transcript',
+      name: 'get_transcripts',
       description:
-        'Get the transcript of a voice session. Can filter by time range within the session using start/end offsets in milliseconds. Omit session_id to get the most recent session.',
+        'Get transcript lines from past voice conversations. Can center around a specific transcript ID (from search_transcripts results) or around a datetime. Use this after search_transcripts to read the conversation surrounding a hit. Start with limit 5-10, then expand to 30 if you need more context.',
       parameters: {
         type: 'object',
         properties: {
+          around_id: {
+            type: 'number',
+            description: 'Transcript ID to center results around. Use the "id" field from search_transcripts results to expand the conversation around a specific hit.',
+          },
+          around_time: {
+            type: 'string',
+            description: 'ISO datetime to center results around (e.g. "2025-01-15T14:32:00Z"). Use this to browse conversations by time.',
+          },
           session_id: {
             type: 'string',
-            description: 'Session ID to retrieve (omit for most recent session)',
+            description: 'Restrict results to a specific voice session',
           },
-          start_offset_ms: {
-            type: 'number',
-            description: 'Only include lines at or after this offset (milliseconds from session start)',
+          user_id: {
+            type: 'string',
+            description: 'Filter results to a specific Discord user ID',
           },
-          end_offset_ms: {
-            type: 'number',
-            description: 'Only include lines at or before this offset (milliseconds from session start)',
+          after: {
+            type: 'string',
+            description: 'Only include lines from after this ISO datetime',
+          },
+          before: {
+            type: 'string',
+            description: 'Only include lines from before this ISO datetime',
           },
           limit: {
             type: 'number',
-            description: 'Max lines to return (default 100, max 200)',
+            description: 'Number of transcript lines to return (default 10, max 200). Use 5-10 for a quick look, 30+ to see full conversation context.',
           },
         },
         required: [],
@@ -226,94 +284,43 @@ toolRegistry.register({
     },
   },
   async execute(args, context) {
-    const sessionId = args.session_id as string | undefined;
-    const startMs = args.start_offset_ms as number | undefined;
-    const endMs = args.end_offset_ms as number | undefined;
-    const limit = Math.min((args.limit as number) || 100, 200);
+    const aroundId = args.around_id as number | undefined;
+    const limit = Math.min((args.limit as number) || 10, 200);
 
-    const { session, rows } = await transcriptStore.sessionFiltered(
-      context.guildId,
-      sessionId,
-      startMs,
-      endMs,
-      limit,
-    );
+    const aroundTime = parseDate(args.around_time as string | undefined);
+    const after = parseDate(args.after as string | undefined);
+    const before = parseDate(args.before as string | undefined);
 
-    if (!session) return 'No session found.';
-
-    const header = `Session ${session.id} | Started: ${session.startedAt?.toISOString?.() ?? 'unknown'}${session.endedAt ? ` | Ended: ${session.endedAt.toISOString()}` : ''}\n`;
-
-    if (rows.length === 0) return header + 'No transcript lines in this range.';
-
-    const formatStamp = (ms: number) => {
-      const totalSec = Math.floor(ms / 1000);
-      const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
-      const s = (totalSec % 60).toString().padStart(2, '0');
-      return `${m}:${s}`;
-    };
-
-    const lines = rows.map(
-      (r: any) => `[${formatStamp(r.startMs)}] <@${r.userId}>: ${r.textNormalized}`,
-    );
-
-    let result = header + lines.join('\n');
-    if (result.length > 3000) {
-      result = result.slice(0, 3000) + `\n\n... (truncated, ${rows.length} total lines. Use start_offset_ms/end_offset_ms to narrow the range.)`;
+    if (args.around_time && !aroundTime) {
+      return 'Invalid around_time format. Use ISO datetime, e.g. "2025-01-15T14:00:00Z".';
     }
-    return result;
-  },
-});
+    if ((args.after && !after) || (args.before && !before)) {
+      return 'Invalid date format. Use ISO datetime, e.g. "2025-01-15T14:00:00Z".';
+    }
+    if (after && before && after > before) {
+      return 'Invalid time range: after is later than before.';
+    }
 
-toolRegistry.register({
-  definition: {
-    type: 'function',
-    function: {
-      name: 'get_context_around',
-      description:
-        'Get transcript lines surrounding a specific moment in a session. Useful for reading the conversation around a search hit. Provide the session_id and center_offset_ms from search results.',
-      parameters: {
-        type: 'object',
-        properties: {
-          session_id: {
-            type: 'string',
-            description: 'The session ID to look in',
-          },
-          center_offset_ms: {
-            type: 'number',
-            description: 'The offset in milliseconds to center the window on (use startMs from search results)',
-          },
-          window_minutes: {
-            type: 'number',
-            description: 'Minutes of context on each side of the center point (default 2)',
-          },
-        },
-        required: ['session_id', 'center_offset_ms'],
-      },
-    },
-  },
-  async execute(args, context) {
-    const sessionId = args.session_id as string;
-    const centerMs = args.center_offset_ms as number;
-    const windowMin = Math.min((args.window_minutes as number) || 2, 10);
-    const windowMs = windowMin * 60 * 1000;
+    const rows = await transcriptStore.getTranscripts({
+      guildId: context.guildId,
+      aroundId,
+      aroundTime: aroundTime ?? undefined,
+      sessionId: args.session_id as string | undefined,
+      userId: args.user_id as string | undefined,
+      after: after ?? undefined,
+      before: before ?? undefined,
+      limit,
+    });
 
-    const rows = await transcriptStore.aroundOffset(sessionId, centerMs, windowMs);
-    if (rows.length === 0) return 'No transcript lines found in this window.';
-
-    const formatStamp = (ms: number) => {
-      const totalSec = Math.floor(ms / 1000);
-      const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
-      const s = (totalSec % 60).toString().padStart(2, '0');
-      return `${m}:${s}`;
-    };
+    if (rows.length === 0) return 'No transcripts found.';
 
     const lines = rows.map(
-      (r: any) => `[${formatStamp(r.startMs)}] <@${r.userId}>: ${r.textNormalized}`,
+      (r: any) => `#${r.id} [${formatDt(r.createdAt)}] ${r.userId}: ${r.textNormalized}`,
     );
 
     let result = lines.join('\n');
     if (result.length > 3000) {
-      result = result.slice(0, 3000) + `\n\n... (truncated, ${rows.length} total lines. Try a smaller window_minutes.)`;
+      result = result.slice(0, 3000) + `\n\n... (truncated, ${rows.length} total lines. Use filters or a smaller limit to narrow the range.)`;
     }
     return result;
   },
