@@ -189,12 +189,15 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       ...history,
     ];
 
+    let userContent: string;
     if (contextPreamble) {
-      messages.push({ role: 'user', content: `[Voice Channel Context]\n${contextPreamble}` });
+      userContent = `[VOICE CHANNEL]\n${contextPreamble}\n\n[COMMAND]\n${command}`;
+    } else {
+      userContent = `[COMMAND]\n${command}`;
     }
 
     const historyStart = messages.length;
-    messages.push({ role: 'user', content: command });
+    messages.push({ role: 'user', content: userContent });
 
     console.log(`[jarvis] Dispatching to LLM (key=${historyKey}) — prompt: "${command.slice(0, 120)}..."`);
 
@@ -213,11 +216,11 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             model: 'local',
             messages,
             tools: toolRegistry.getAllDefinitions(),
-            temperature: 0.75,
-            top_p: 0.92,
-            min_p: 0.0,
-            top_k: 40,
-            presence_penalty: 0.0,
+            temperature: 1.0,
+            top_p: 0.95,
+            min_p: 0.05,
+            top_k: 64,
+            presence_penalty: 0.2,
             frequency_penalty: 0.0,
             repeat_penalty: 1.0,
             max_tokens: config.llmMaxTokens,
