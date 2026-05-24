@@ -55,6 +55,16 @@ model Transcript {
   @@index([guildId, createdAt])
 }
 
+model Note {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([guildId, createdAt])
+}
+
 model TermAlias {
   id        Int      @id @default(autoincrement())
   canonical String

@@ -3,6 +3,7 @@ import type { Client, Message, VoiceBasedChannel } from 'discord.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
+import { noteStore } from './note-store';
 import type { CommandHandler, JarvisPayload } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
@@ -167,10 +168,30 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     const t0 = performance.now();
     const history = guildHistory.get(historyKey) ?? [];
 
+    let systemPrompt = config.jarvisSystemPrompt;
+    if (guildId) {
+      try {
+        const titles = await noteStore.getTitles(guildId);
+        if (titles.length > 0) {
+          const maxNotes = 50;
+          const visible = titles.slice(0, maxNotes);
+          const overflow = titles.length - visible.length;
+          const lines = visible.map((n) => `#${n.id} ${n.title}`);
+          let block = `\n\nYOUR NOTES (use search_notes with the id to read full content):\n${lines.join('\n')}`;
+          if (overflow > 0) {
+            block += `\n(... and ${overflow} more — use search_notes to find older ones)`;
+          }
+          systemPrompt += block;
+        }
+      } catch (err) {
+        console.warn('[jarvis] Failed to load notes for context injection:', err);
+      }
+    }
+
     const tokenBudget = config.llmContextLength - config.llmMaxTokens;
     const estimateCurrentSize = (): number => {
       const preview: ChatMessage[] = [
-        { role: 'system', content: config.jarvisSystemPrompt },
+        { role: 'system', content: systemPrompt },
         ...history,
       ];
       if (contextPreamble) {
@@ -185,7 +206,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     }
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: config.jarvisSystemPrompt },
+      { role: 'system', content: systemPrompt },
       ...history,
     ];
 
@@ -216,7 +237,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             model: 'local',
             messages,
             tools: toolRegistry.getAllDefinitions(),
-            temperature: 1.0,
+            temperature: 0.8,
             top_p: 0.95,
             min_p: 0.05,
             top_k: 64,

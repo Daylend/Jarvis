@@ -1,5 +1,6 @@
 import type { Client } from 'discord.js';
 import { transcriptStore } from './transcript-store';
+import { noteStore } from './note-store';
 
 export interface JarvisTool {
   definition: {
@@ -346,5 +347,125 @@ toolRegistry.register({
       return 'Memory cleared. Starting fresh.';
     }
     return 'Memory clear not available in this context.';
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'save_note',
+      description:
+        'Save a note for the owner. Always provide a short title (summary) and full content. Use when the owner says "remember X", "note that", or asks you to keep track of something.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Short summary of the note (used as an index line in your context)',
+          },
+          content: {
+            type: 'string',
+            description: 'Full detail of the note',
+          },
+        },
+        required: ['title', 'content'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const title = args.title as string;
+    const content = args.content as string;
+    if (!title.trim() || !content.trim()) {
+      return 'Both title and content are required.';
+    }
+    const note = await noteStore.save(context.guildId, title.trim(), content.trim());
+    return `Saved note #${note.id}: "${title}"`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'search_notes',
+      description:
+        'Search saved notes by keyword or retrieve a specific note by ID. Use to recall notes the owner has asked you to remember. If you see a note title in your context and need the full content, call this with the note ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'number',
+            description: 'Retrieve a specific note by its ID number',
+          },
+          query: {
+            type: 'string',
+            description: 'Keyword to search for in note titles and content',
+          },
+          limit: {
+            type: 'number',
+            description: 'Max results to return (default 10, max 50)',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  async execute(args, context) {
+    if (args.id !== undefined) {
+      const note = await noteStore.getById(args.id as number, context.guildId);
+      if (!note) return `Note #${args.id} not found.`;
+      return JSON.stringify({
+        id: note.id,
+        title: note.title,
+        content: note.content,
+        createdAt: note.createdAt,
+      });
+    }
+
+    const query = args.query as string | undefined;
+    const limit = Math.min((args.limit as number) || 10, 50);
+    const notes = await noteStore.search(context.guildId, query, limit);
+    if (notes.length === 0) return query ? `No notes found matching "${query}".` : 'No saved notes.';
+
+    const results = notes.map((n: any) => ({
+      id: n.id,
+      title: n.title,
+      content: n.content,
+    }));
+
+    const json = JSON.stringify(results, null, 2);
+    if (json.length > 3000) {
+      const truncated = JSON.stringify(results.slice(0, 10), null, 2);
+      return truncated + `\n\n... (${notes.length} total results, showing first 10. Narrow your search.)`;
+    }
+    return json;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'delete_note',
+      description:
+        'Delete a saved note by ID. Use when the owner asks to forget or remove a specific note.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'number',
+            description: 'The ID of the note to delete',
+          },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const id = args.id as number;
+    const deleted = await noteStore.delete(id, context.guildId);
+    if (!deleted) return `Note #${id} not found.`;
+    return `Deleted note #${id}.`;
   },
 });
