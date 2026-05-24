@@ -8,7 +8,9 @@ TTS_REF_TEXT = os.getenv(
     "I'm sorry I know you mean well... You just didn't think it through.",
 )
 TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
-TTS_CFG_STEPS = int(os.getenv("TTS_CFG_STEPS", "25"))
+TTS_CFG_STEPS = int(os.getenv("TTS_CFG_STEPS", "12"))
+TTS_CFG_STRENGTH = float(os.getenv("TTS_CFG_STRENGTH", "0.0"))
+TTS_TORCH_COMPILE = os.getenv("TTS_TORCH_COMPILE", "true").lower() == "true"
 TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 TTS_VOCODER_NAME = os.getenv("TTS_VOCODER_NAME", "vocos")
 TTS_SETTINGS_PATH = os.getenv("TTS_SETTINGS_PATH", "/app/voice_samples/.tts_settings.json")

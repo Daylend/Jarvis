@@ -52,6 +52,13 @@ async def startup():
         logger.exception(
             "Failed to pre-load F5-TTS model — will retry on first request"
         )
+        return
+
+    logger.info("Running warmup inference to trigger compilation...")
+    try:
+        tts_model._warmup()
+    except Exception:
+        logger.exception("Warmup inference failed — first request may be slow")
 
 
 @app.get("/healthz")

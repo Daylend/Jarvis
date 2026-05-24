@@ -139,6 +139,7 @@ def _ensure_loaded():
         TTS_SAMPLE_RATE,
         TTS_SPEED,
         TTS_VOCODER_NAME,
+        TTS_TORCH_COMPILE,
     )
 
     DEVICE = TTS_DEVICE
@@ -186,6 +187,13 @@ def _ensure_loaded():
     MODEL = model
     VOCODER = vocoder
 
+    if TTS_TORCH_COMPILE:
+        logger.info("Compiling DiT model with torch.compile(mode=max-autotune)...")
+        MODEL = torch.compile(MODEL, mode="max-autotune")
+        logger.info("Compiling vocoder with torch.compile(mode=reduce-overhead)...")
+        VOCODER = torch.compile(VOCODER, mode="reduce-overhead")
+        logger.info("torch.compile complete.")
+
     ref_audio, ref_text = preprocess_ref_audio_text(
         TTS_REF_AUDIO,
         _resolve_ref_text(TTS_REF_AUDIO, TTS_REF_TEXT),
@@ -213,12 +221,46 @@ def _ensure_loaded():
 
     logger.info("F5-TTS model loaded. device=%s", DEVICE)
 
+def _warmup():
+    import time as time_mod
+    _ensure_loaded()
+
+    from app.config import TTS_CFG_STRENGTH
+    from f5_tts.infer.utils_infer import infer_process
+
+    cfg_val = TTS_CFG_STRENGTH
+    logger.info("Running TTS warmup inference (cfg_strength=%s)...", cfg_val)
+
+    global REF_AUDIO, REF_TEXT
+    if REF_AUDIO is None or REF_TEXT is None:
+        logger.warning("No REF_AUDIO/REF_TEXT set — skipping warmup")
+        return
+
+    t0 = time_mod.perf_counter()
+    _ = infer_process(
+        ref_audio=REF_AUDIO,
+        ref_text=REF_TEXT,
+        gen_text="Warmup.",
+        model_obj=MODEL,
+        vocoder=VOCODER,
+        nfe_step=4,
+        cfg_strength=cfg_val,
+        sway_sampling_coef=-1.0,
+        speed=SPEED,
+        show_info=logger.info,
+        progress=None,
+        device=DEVICE,
+    )
+    dur = (time_mod.perf_counter() - t0) * 1000
+    logger.info("TTS warmup complete in %.0f ms", dur)
+
+
 def synthesize(text: str):
     import time as time_mod
 
     _ensure_loaded()
 
-    from app.config import TTS_CFG_STEPS
+    from app.config import TTS_CFG_STEPS, TTS_CFG_STRENGTH
     from f5_tts.infer.utils_infer import infer_process
 
     t0 = time_mod.perf_counter()
@@ -230,7 +272,7 @@ def synthesize(text: str):
         model_obj=MODEL,
         vocoder=VOCODER,
         nfe_step=TTS_CFG_STEPS,
-        cfg_strength=2.0,
+        cfg_strength=TTS_CFG_STRENGTH,
         sway_sampling_coef=-1.0,
         speed=SPEED,
         show_info=logger.info,
