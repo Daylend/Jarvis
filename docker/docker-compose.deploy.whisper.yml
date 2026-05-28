@@ -106,7 +106,7 @@ services:
       - seccomp=unconfined
     environment:
       - TTS_DEVICE=cuda:0
-      - TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav
       - TTS_VOCODER_NAME=vocos
       - TTS_CFG_STEPS=${TTS_CFG_STEPS:-12}
       - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-0.0}
