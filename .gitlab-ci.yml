@@ -1,3 +1,6 @@
+# Build the containers using rootless BuildKit, then push to local container registry.
+# Requires env vars REGISTRY_USERNAME and REGISTRY_PASSWORD.
+
 stages:
   - build
 
@@ -25,33 +28,48 @@ variables:
   TTS_IMAGE: $DOCKER_REGISTRY/$TTS_IMAGE_NAME:$CI_COMMIT_SHA
   TTS_LATEST_IMAGE: $DOCKER_REGISTRY/$TTS_IMAGE_NAME:latest
 
-  # Explicit build cache image in your own registry
-  ASR_CACHE_IMAGE: registry.example.com/paxfax-asr-buildcache:main
+  # Rootless BuildKit configuration
+  BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  BUILDKIT_CACHE_DIR: /cache/buildkit
 
-  # Docker-in-Docker, TLS disabled
-  DOCKER_HOST: tcp://docker:2375
-  DOCKER_TLS_CERTDIR: ""
-  DOCKER_TLS_VERIFY: ""
-  DOCKER_CERT_PATH: ""
-  DOCKER_DRIVER: overlay2
+.buildkit-auth: &buildkit-auth
+  - mkdir -p ~/.docker
+  - mkdir -p "$BUILDKIT_CACHE_DIR"
+  - |
+    if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+      echo "Configuring registry auth for $DOCKER_REGISTRY"
+      cat > ~/.docker/config.json <<EOF
+    {
+      "auths": {
+        "$DOCKER_REGISTRY": {
+          "username": "$REGISTRY_USERNAME",
+          "password": "$REGISTRY_PASSWORD"
+        }
+      }
+    }
+    EOF
+    fi
 
 # ── Bot ───────────────────────────────────────────────────────────────────────
 build-docker:
   stage: build
-  image: docker:27.4.1-cli
-  services:
-    - name: docker:27.4.1-dind
-      alias: docker
-      command: ["--tls=false"]
-  before_script:
-    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  before_script: *buildkit-auth
   script:
-    - echo "Building bot Docker image..."
-    - docker build --build-arg BUILD_SHA="$CI_COMMIT_SHA" -t "$DOCKER_IMAGE" -t "$LATEST_IMAGE" -f docker/Dockerfile .
-    - echo "Pushing bot image to registry $DOCKER_REGISTRY"
-    - docker push "$DOCKER_IMAGE"
-    - docker push "$LATEST_IMAGE"
-    - echo "Successfully built and pushed $DOCKER_IMAGE"
+    - echo "Building and pushing bot Docker image..."
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=docker \
+        --opt filename=Dockerfile \
+        --opt build-arg:BUILD_SHA="$CI_COMMIT_SHA" \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax",mode=max \
+        --output type=image,\"name=$DOCKER_IMAGE,$LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $DOCKER_IMAGE"
     - echo "Also tagged and pushed as $LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -62,30 +80,24 @@ build-docker:
 # ── ASR Sidecar ───────────────────────────────────────────────────────────────
 build-asr:
   stage: build
-  image: docker:27.4.1-cli
-  services:
-    - name: docker:27.4.1-dind
-      alias: docker
-      command: ["--tls=false"]
-  before_script:
-    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
-    - echo "ASR_IMAGE=$ASR_IMAGE"
-    - echo "ASR_LATEST_IMAGE=$ASR_LATEST_IMAGE"
-    - echo "ASR_CACHE_IMAGE=$ASR_CACHE_IMAGE"
-    - docker context create asr-builder || true
-    - docker buildx create asr-builder --driver docker-container --use || docker buildx use asr-builder
-    - docker buildx inspect --bootstrap
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  before_script: *buildkit-auth
   script:
+    - echo "Building and pushing ASR Docker image..."
     - |
-      docker buildx build \
-        --file services/asr/Dockerfile \
-        --tag "$ASR_IMAGE" \
-        --tag "$ASR_LATEST_IMAGE" \
-        --build-arg BUILD_SHA="$CI_COMMIT_SHA" \
-        --cache-from "type=registry,ref=$ASR_CACHE_IMAGE" \
-        --cache-to "type=registry,ref=$ASR_CACHE_IMAGE,mode=max" \
-        --push \
-        .
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=services/asr \
+        --opt filename=Dockerfile \
+        --opt build-arg:BUILD_SHA="$CI_COMMIT_SHA" \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr",mode=max \
+        --output type=image,\"name=$ASR_IMAGE,$ASR_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $ASR_IMAGE"
+    - echo "Also tagged and pushed as $ASR_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
@@ -98,20 +110,23 @@ build-asr:
 # ── ASR Whisper ROCm Sidecar ───────────────────────────────────────────────────
 build-asr-whisper-rocm:
   stage: build
-  image: docker:27.4.1-cli
-  services:
-    - name: docker:27.4.1-dind
-      alias: docker
-      command: ["--tls=false"]
-  before_script:
-    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  before_script: *buildkit-auth
   script:
-    - echo "Building Whisper ROCm ASR Docker image..."
-    - docker build -t "$ASR_WHISPER_IMAGE" -t "$ASR_WHISPER_LATEST_IMAGE" -f services/asr-whisper-rocm/Dockerfile .
-    - echo "Pushing Whisper image to registry $DOCKER_REGISTRY"
-    - docker push "$ASR_WHISPER_IMAGE"
-    - docker push "$ASR_WHISPER_LATEST_IMAGE"
-    - echo "Successfully built and pushed $ASR_WHISPER_IMAGE"
+    - echo "Building and pushing Whisper ROCm ASR Docker image..."
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=services/asr-whisper-rocm \
+        --opt filename=Dockerfile \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper-rocm" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper-rocm",mode=max \
+        --output type=image,\"name=$ASR_WHISPER_IMAGE,$ASR_WHISPER_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $ASR_WHISPER_IMAGE"
+    - echo "Also tagged and pushed as $ASR_WHISPER_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
@@ -124,20 +139,23 @@ build-asr-whisper-rocm:
 # ── TTS Sidecar ───────────────────────────────────────────────────────────────
 build-tts:
   stage: build
-  image: docker:27.4.1-cli
-  services:
-    - name: docker:27.4.1-dind
-      alias: docker
-      command: ["--tls=false"]
-  before_script:
-    - echo "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USERNAME" --password-stdin "$DOCKER_REGISTRY"
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  before_script: *buildkit-auth
   script:
-    - echo "Building TTS Docker image..."
-    - docker build -t "$TTS_IMAGE" -t "$TTS_LATEST_IMAGE" -f services/tts/Dockerfile .
-    - echo "Pushing TTS image to registry $DOCKER_REGISTRY"
-    - docker push "$TTS_IMAGE"
-    - docker push "$TTS_LATEST_IMAGE"
-    - echo "Successfully built and pushed $TTS_IMAGE"
+    - echo "Building and pushing TTS Docker image..."
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=services/tts \
+        --opt filename=Dockerfile \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-tts" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-tts",mode=max \
+        --output type=image,\"name=$TTS_IMAGE,$TTS_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $TTS_IMAGE"
+    - echo "Also tagged and pushed as $TTS_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
