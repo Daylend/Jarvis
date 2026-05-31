@@ -4,11 +4,12 @@ services:
     container_name: paxfax
     restart: unless-stopped
     volumes:
-      - /mnt/user/appdata/paxfax/data:/app/data
-      - /mnt/user/appdata/paxfax/logs:/app/logs
+      - /srv/docker/appdata/paxfax/data:/app/data
+      - /srv/docker/appdata/paxfax/logs:/app/logs
+      - /srv/docker/appdata/paxfax/personalities:/app/personalities
     environment:
-      - PUID=99
-      - PGID=100
+      - PUID=1000
+      - PGID=1000
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_DIR=/app/logs
@@ -35,8 +36,7 @@ services:
         max-size: "20m"
         max-file: "5"
     networks:
-      - deploy
-      - isolated
+      - npm-net
     depends_on:
       asr-whisper-rocm:
         condition: service_healthy
@@ -74,7 +74,7 @@ services:
       - HF_HOME=/models/hf
       - TRANSFORMERS_CACHE=/models/hf
     volumes:
-      - /mnt/user/appdata/paxfax/asr-models-cache:/models
+      - /srv/docker/appdata/paxfax/asr-models-cache:/models
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
       interval: 15s
@@ -87,7 +87,7 @@ services:
         max-size: "20m"
         max-file: "5"
     networks:
-      - deploy
+      - npm-net
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -114,8 +114,8 @@ services:
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
     volumes:
-      - /mnt/user/appdata/paxfax/voice_samples:/app/voice_samples
-      - /mnt/user/appdata/paxfax/tts-models:/models
+      - /srv/docker/appdata/paxfax/voice_samples:/app/voice_samples
+      - /srv/docker/appdata/paxfax/tts-models:/models
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8860/healthz"]
       interval: 30s
@@ -128,12 +128,10 @@ services:
         max-size: "20m"
         max-file: "5"
     networks:
-      - deploy
+      - npm-net
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
 networks:
-  deploy:
-    external: true
-  isolated:
+  npm-net:
     external: true

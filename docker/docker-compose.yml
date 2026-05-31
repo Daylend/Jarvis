@@ -9,6 +9,7 @@ services:
     volumes:
       - ../data:/app/data
       - ../logs:/app/logs
+      - ../personalities:/app/personalities
     environment:
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=info

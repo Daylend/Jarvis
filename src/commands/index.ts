@@ -8,6 +8,7 @@ import { termsCommand } from './terms';
 import { sayCommand } from './say';
 import { voiceCommand } from './voice';
 import { jarvisCommand } from './jarvis';
+import { personalityCommand } from './personality';
 
 export const commands = [
   quotesCommand,
@@ -20,4 +21,5 @@ export const commands = [
   sayCommand,
   voiceCommand,
   jarvisCommand,
+  personalityCommand,
 ];

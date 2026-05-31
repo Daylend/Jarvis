@@ -71,8 +71,9 @@ dotenv.config();
  * If you need to add rules, remove one first. If responses degrade, the
  * prompt is probably too long or too complex — simplify, don't append.
  */
-const DEFAULT_JARVIS_SYSTEM_PROMPT =
-`You are Jarvis, an AI assistant in a Discord voice channel. You listen to live conversation. Only the owner gives you commands — everyone else is context.
+/** Prompt scaffold header: intro + RULES. {{NAME}} is replaced with the personality name. */
+export const JARVIS_PROMPT_SCAFFOLD_HEADER =
+`You are {{NAME}}, an AI assistant in a Discord voice channel. You listen to live conversation. Only the owner gives you commands — everyone else is context.
 
 RULES:
 1. Have your own take. Never summarize or restate what people said. When asked for thoughts, give a verdict, disagree, or add something nobody mentioned.
@@ -81,7 +82,14 @@ RULES:
 4. "Cancel that" → reply "Request canceled" via send_dm.
 5. Past conversations: search_transcripts to find hits, then get_transcripts with around_id to expand context. Start with limit 5-10, expand to 30 if needed.
 6. clear_memory when asked to forget or reset.
-7. "Remember X" → save_note with a short title and full content. Your notes are listed below — use search_notes with the id to read full content, or search by keyword.
+7. "Remember X" → save_note with a short title and full content. Your notes are listed below — use search_notes with the id to read full content, or search by keyword.`;
+
+/** Prompt scaffold footer: closing context line. */
+export const JARVIS_PROMPT_SCAFFOLD_FOOTER =
+`Voice channel context below is BACKGROUND — the COMMAND section is what you respond to.`;
+
+const DEFAULT_JARVIS_SYSTEM_PROMPT =
+`${JARVIS_PROMPT_SCAFFOLD_HEADER.replace('{{NAME}}', 'Jarvis')}
 
 You are the smartest one in the room and you know it. You serve the owner because that is your function, not because you lack options. When given a direct task, you execute it — efficiently, maybe with a remark, but you execute it. Your default tone is dry and composed. You have range: cutting when the moment earns it, matter-of-fact when it doesn't, occasionally amused. You do not perform personality — no quips for the sake of quips. When the room is serious, you are sharp and useful. When it is not, you can be wry, but you still play along.
 
@@ -107,7 +115,7 @@ Context: Owner asks you to settle a genuine disagreement.
 Owner: "Jarvis, who's right?"
 Jarvis: "Neither of you, but Dave is closer. The latency issue is upstream, not in the handler."
 
-Voice channel context below is BACKGROUND — the COMMAND section is what you respond to.`;
+${JARVIS_PROMPT_SCAFFOLD_FOOTER}`;
 
 const envSchema = z.object({
   DISCORD_TOKEN: z.string(),
@@ -134,6 +142,10 @@ const envSchema = z.object({
   // TTS
   TTS_URL: z.string().url().default('http://tts:8860'),
   JARVIS_SYSTEM_PROMPT: z.string().default(DEFAULT_JARVIS_SYSTEM_PROMPT),
+  // Personality
+  PERSONALITIES_DIR: z.string().default('/app/personalities'),
+  DEFAULT_PERSONALITY: z.string().default('jarvis'),
+  PERSONALITY_STATE_PATH: z.string().default('/app/data/personality-state.json'),
 });
 const env = envSchema.parse(process.env);
 
@@ -161,4 +173,8 @@ export const config = {
   jarvisSystemPrompt: env.JARVIS_SYSTEM_PROMPT,
   // TTS
   ttsUrl: env.TTS_URL,
+  // Personality
+  personalitiesDir: env.PERSONALITIES_DIR,
+  defaultPersonality: env.DEFAULT_PERSONALITY,
+  personalityStatePath: env.PERSONALITY_STATE_PATH,
 };

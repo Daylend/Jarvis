@@ -7,6 +7,7 @@ import { getContext, setContext } from './ai-context';
 import { getChannelUnlock } from './channel-lock';
 import { resolveMentions } from './utils';
 import { bootstrapVoice, sessionManager, handleDmJarvis } from './voice';
+import { personalityStore } from './voice/personality-store';
 import axios from 'axios';
 
 const client = new Client({
@@ -32,6 +33,9 @@ const BUILD_STAMP = '2026-05-12T06:53:00Z [debug-pcm-logging]';
 client.once(Events.ClientReady, async (c) => {
   console.log(`Ready! Logged in as ${c.user.tag} | build: ${BUILD_STAMP}`);
   await bootstrapVoice(client);
+  personalityStore.init().catch((err) => {
+    console.error('[startup] personalityStore.init failed:', err);
+  });
 });
 
 client.on(Events.InteractionCreate, async interaction => {

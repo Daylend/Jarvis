@@ -4,6 +4,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'dis
 import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
 import { noteStore } from './note-store';
+import { personalityStore } from './personality-store';
 import type { CommandHandler, JarvisPayload } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
@@ -168,7 +169,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     const t0 = performance.now();
     const history = guildHistory.get(historyKey) ?? [];
 
-    let systemPrompt = config.jarvisSystemPrompt;
+    let systemPrompt = personalityStore.getActivePrompt();
     if (guildId) {
       try {
         const titles = await noteStore.getTitles(guildId);
