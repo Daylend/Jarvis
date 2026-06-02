@@ -16,8 +16,6 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - CLIENT_ID=${CLIENT_ID}
       - OWNER_USER_ID=${OWNER_USER_ID}
-      - OPENWEBUI_API_URL=${OPENWEBUI_API_URL}
-      - OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}
       - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr-whisper-rocm:8765/ws/transcribe}
       - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr-whisper-rocm:8765}
       - AUTO_JOIN_OWNER=${AUTO_JOIN_OWNER:-true}
@@ -29,6 +27,13 @@ services:
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2048}
       - LLM_CONTEXT_LENGTH=${LLM_CONTEXT_LENGTH:-131072}
       - LLM_MAX_TOOL_LOOP=${LLM_MAX_TOOL_LOOP:-20}
+      - JARVIS_LLM_BACKEND=${JARVIS_LLM_BACKEND:-local}
+      - JARVIS_LLM_TIMEOUT_MS=${JARVIS_LLM_TIMEOUT_MS:-60000}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
+      - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
+      - OPENROUTER_TITLE=${OPENROUTER_TITLE:-Jarvis}
       - TTS_URL=${TTS_URL:-http://tts:8860}
     logging:
       driver: "json-file"

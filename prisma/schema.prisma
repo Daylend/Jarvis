@@ -15,14 +15,6 @@ model Quote {
   createdAt DateTime @default(now())
 }
 
-model AIProvider {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  model     String
-  addedBy   String?
-  createdAt DateTime @default(now())
-}
-
 model VoiceSession {
   id          String       @id @default(cuid())
   guildId     String

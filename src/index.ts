@@ -1,14 +1,11 @@
-import { Client, GatewayIntentBits, Events, Collection, Message, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Collection, Partials } from 'discord.js';
 import { config } from './config';
 import { commands } from './commands';
 import { prisma } from './db';
 import { angryResponses } from './angry-responses';
-import { getContext, setContext } from './ai-context';
-import { getChannelUnlock } from './channel-lock';
-import { resolveMentions } from './utils';
 import { bootstrapVoice, sessionManager, handleDmJarvis } from './voice';
 import { personalityStore } from './voice/personality-store';
-import axios from 'axios';
+import { llmProviderStore } from './voice/llm-provider-store';
 
 const client = new Client({
   intents: [
@@ -36,6 +33,7 @@ client.once(Events.ClientReady, async (c) => {
   personalityStore.init().catch((err) => {
     console.error('[startup] personalityStore.init failed:', err);
   });
+  llmProviderStore.init();
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -79,142 +77,8 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
 
-  // AI Reply Logic
-  if (message.reference && message.reference.messageId) {
-    const referencedMessage = await message.channel.messages.fetch(message.reference.messageId);
-    if (referencedMessage.author.id === client.user?.id) {
-      const context = getContext(referencedMessage.id);
-      if (context) {
-        // Check reply limit
-        const replyCount = context.history.filter((m: any) => m.role === 'assistant').length;
-        if (replyCount >= 10) {
-           await message.reply("Conversation limit reached. Please start a new conversation.");
-           return;
-        }
-
-        // Check if channel is unlocked or user is owner
-        const unlock = getChannelUnlock(message.channelId);
-        if (message.author.id !== config.ownerId && !unlock) {
-          // If not owner and not unlocked, do nothing (and return to avoid falling through)
-          return; 
-        }
-
-        // Continue conversation
-        const displayName = message.member?.displayName || message.author.displayName;
-        const resolvedContent = await resolveMentions(message.content, message.client, message.guild);
-        const userPrompt = `${displayName} (${message.author.username}): ${resolvedContent}`;
-        const userContent: any[] = [{ type: 'text', text: userPrompt }];
-        // Handle attachments in reply if any (optional, but good to have)
-        if (message.attachments.size > 0) {
-             message.attachments.forEach(att => {
-                 userContent.push({ type: 'image_url', image_url: { url: att.url } });
-             });
-        }
-
-        context.history.push({ role: 'user', content: userContent as any });
-
-        try {
-          // Show typing
-          await message.channel.sendTyping();
-
-          const response = await axios.post(
-            `${config.openWebUiUrl}/chat/completions`,
-            {
-              model: context.providerModel,
-              messages: context.history,
-            },
-            {
-              headers: {
-                'Authorization': `Bearer ${config.openWebUiKey}`,
-                'Content-Type': 'application/json',
-              },
-            }
-          );
-
-          const replyContent = response.data.choices[0].message.content.trim().replace(/\n{3,}/g, '\n\n');
-          
-          // Split and send
-          const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
-          let lastMessage;
-          for (const chunk of chunks) {
-             lastMessage = await message.reply(chunk);
-          }
-
-          if (lastMessage) {
-            context.history.push({ role: 'assistant', content: replyContent });
-            setContext(lastMessage.id, context);
-          }
-
-        } catch (error) {
-          console.error('AI Reply Error:', error);
-          await message.reply('Error continuing conversation.');
-        }
-      }
-      // Return here to prevent falling through to @mention logic if it was a reply to the bot
-      return;
-    }
-  }
-
   // @Mention Logic
   if (client.user && message.mentions.has(client.user)) {
-    // Check if channel is unlocked for AI
-    const unlock = getChannelUnlock(message.channelId);
-    if (unlock) {
-      // AI Response instead of Angry/Quote
-      try {
-        await message.channel.sendTyping();
-
-        // Get provider model
-        const provider = await prisma.aIProvider.findUnique({
-          where: { name: unlock.providerName },
-        });
-
-        if (!provider) {
-           // Fallback if provider deleted?
-           return; 
-        }
-
-        const displayName = message.member?.displayName || message.author.displayName;
-        const resolvedContent = await resolveMentions(message.content, message.client, message.guild);
-        const userPrompt = `${displayName} (${message.author.username}): ${resolvedContent}`;
-        const messages: any[] = [{ role: 'user', content: userPrompt }];
-
-        const response = await axios.post(
-            `${config.openWebUiUrl}/chat/completions`,
-            {
-              model: provider.model,
-              messages: messages,
-            },
-            {
-              headers: {
-                'Authorization': `Bearer ${config.openWebUiKey}`,
-                'Content-Type': 'application/json',
-              },
-            }
-          );
-
-          const replyContent = response.data.choices[0].message.content.trim().replace(/\n{3,}/g, '\n\n');
-          
-          const chunks = replyContent.match(/[\s\S]{1,2000}/g) || [];
-          let lastMessage;
-          for (const chunk of chunks) {
-             lastMessage = await message.reply(chunk);
-          }
-
-          if (lastMessage) {
-            messages.push({ role: 'assistant', content: replyContent });
-            setContext(lastMessage.id, {
-              providerModel: provider.model,
-              history: messages,
-            });
-          }
-          return; // Don't do angry logic
-
-      } catch (error) {
-        console.error("AI Unlock Error", error);
-      }
-    }
-
     const rng = Math.random() * 100;
     
     if (rng < 70) {

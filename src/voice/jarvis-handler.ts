@@ -5,6 +5,7 @@ import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
 import { noteStore } from './note-store';
 import { personalityStore } from './personality-store';
+import { llmProviderStore } from './llm-provider-store';
 import type { CommandHandler, JarvisPayload } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
@@ -221,7 +222,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     const historyStart = messages.length;
     messages.push({ role: 'user', content: userContent });
 
-    console.log(`[jarvis] Dispatching to LLM (key=${historyKey}) — prompt: "${command.slice(0, 120)}..."`);
+    console.log(`[jarvis] Dispatching to LLM (key=${historyKey} backend=${llmProviderStore.getBackend()} model=${llmProviderStore.getModel()}) — prompt: "${command.slice(0, 120)}..."`);
 
     let finalText: string | null = null;
     let toolDelivered = false;
@@ -232,29 +233,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       console.log(`[jarvis] LLM call iteration ${iterCount}/${config.llmMaxToolLoop}`);
 
       try {
-        const response = await axios.post(
-          `${config.llamaCppUrl}/chat/completions`,
-          {
-            model: 'local',
-            messages,
-            tools: toolRegistry.getAllDefinitions(),
-            temperature: 0.8,
-            top_p: 0.95,
-            min_p: 0.05,
-            top_k: 64,
-            presence_penalty: 0.2,
-            frequency_penalty: 0.0,
-            repeat_penalty: 1.0,
-            max_tokens: config.llmMaxTokens,
-            chat_template_kwargs: {
-              enable_thinking: false,
-            },
-          },
-          {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 30_000,
-          },
-        );
+        const { url, headers, body } = llmProviderStore.buildRequest(messages, toolRegistry.getAllDefinitions());
+        const response = await axios.post(url, body, { headers, timeout: config.jarvisLlmTimeoutMs });
 
         console.log(
           `[jarvis] LLM HTTP ${response.status}, choices: ${response.data.choices?.length ?? 'none'}, raw: ${JSON.stringify(response.data).slice(0, 500)}`,
