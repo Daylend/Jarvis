@@ -14,8 +14,8 @@ services:
       - DATABASE_URL=file:/app/data/database.sqlite
       - LOG_LEVEL=info
       - LOG_DIR=/app/logs
-      - TRANSCRIBE_WS_URL=ws://asr-whisper-rocm:8765/ws/transcribe
-      - TRANSCRIBE_HTTP_URL=http://asr-whisper-rocm:8765
+      - TRANSCRIBE_WS_URL=ws://asr:8765/ws/transcribe
+      - TRANSCRIBE_HTTP_URL=http://asr:8765
       - AUTO_JOIN_OWNER=true
       - TRIGGER_PHRASE=jarvis
       - JARVIS_CONTEXT_SECONDS=180

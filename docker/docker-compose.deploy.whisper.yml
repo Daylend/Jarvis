@@ -16,8 +16,8 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - CLIENT_ID=${CLIENT_ID}
       - OWNER_USER_ID=${OWNER_USER_ID}
-      - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr-whisper-rocm:8765/ws/transcribe}
-      - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr-whisper-rocm:8765}
+      - TRANSCRIBE_WS_URL=${TRANSCRIBE_WS_URL:-ws://asr:8765/ws/transcribe}
+      - TRANSCRIBE_HTTP_URL=${TRANSCRIBE_HTTP_URL:-http://asr:8765}
       - AUTO_JOIN_OWNER=${AUTO_JOIN_OWNER:-true}
       - TRIGGER_PHRASE=${TRIGGER_PHRASE:-jarvis}
       - JARVIS_CONTEXT_SECONDS=${JARVIS_CONTEXT_SECONDS:-180}
@@ -43,16 +43,16 @@ services:
     networks:
       - npm-net
     depends_on:
-      asr-whisper-rocm:
+      asr:
         condition: service_healthy
       tts:
         condition: service_healthy
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  asr-whisper-rocm:
-    image: registry.example.com/paxfax-asr-whisper-rocm:latest
-    container_name: paxfax-asr-whisper-rocm
+  asr:
+    image: registry.example.com/paxfax-asr-whisper:latest
+    container_name: paxfax-asr-whisper
     restart: unless-stopped
     devices:
       - /dev/kfd
@@ -64,6 +64,7 @@ services:
     security_opt:
       - seccomp=unconfined
     environment:
+      - ASR_ENGINE=whisper
       - ASR_MODEL_ID=${ASR_MODEL_ID:-openai/whisper-large-v3-turbo}
       - ASR_DEVICE=${ASR_DEVICE:-cuda:0}
       - ASR_DTYPE=${ASR_DTYPE:-float16}

@@ -18,8 +18,8 @@ interface SessionState {
   /** streamIds that are currently open (for reconnect replay) */
   openStreams: Map<number, string>; // streamId -> userId
   /** streamId -> set of "lineId:endMs" keys for which we already dispatched a `final`. Used to dedupe.
-   *  Key is a composite of lineId+endMs because Moonshine may reuse lineId across utterances within
-   *  a single long-lived Manual stream; endMs disambiguates. */
+   *  Key is a composite of lineId+endMs to disambiguate reused lineIds across utterances within
+   *  a single long-lived manual stream. */
   finalsByStream: Map<number, Set<string>>;
   /** streamId -> set of "lineId:text" keys. Catches re-emissions of the same line with different
    *  endMs (caused by endpoint flush silence injection). */
@@ -205,7 +205,6 @@ class AsrClient {
         sampleRate: 16000,
         encoding: 's16le',
         channels: 1,
-        engineHint: 'moonshine',
       });
 
       // Re-open any streams that were active before reconnect
@@ -342,7 +341,7 @@ class AsrClient {
     }
 
     // --- Cross-segment overlap trimming ---
-    // Moonshine's VAD look-behind buffer can cause the start of a new segment
+    // The VAD look-behind buffer can cause the start of a new segment
     // to include text that was already transcribed at the end of the previous
     // segment. Trim any overlapping prefix from the current final's text.
     const prev = state.lastFinalText.get(msg.streamId);

@@ -1,13 +1,13 @@
 services:
   paxfax:
     depends_on:
-      asr-whisper-rocm:
+      asr:
         condition: service_healthy
 
-  asr-whisper-rocm:
+  asr:
     build:
       context: ..
-      dockerfile: services/asr-whisper-rocm/Dockerfile
+      dockerfile: services/asr/Dockerfile
       args:
         BASE_IMAGE: rocm/pytorch:latest
     restart: unless-stopped
@@ -21,6 +21,7 @@ services:
     security_opt:
       - seccomp=unconfined
     environment:
+      - ASR_ENGINE=whisper
       - ASR_MODEL_ID=openai/whisper-large-v3-turbo
       - ASR_DEVICE=cuda:0
       - ASR_DTYPE=float16

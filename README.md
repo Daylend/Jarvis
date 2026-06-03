@@ -80,7 +80,7 @@ The project includes a `docker-compose.yml` for local development and `docker/do
 - `src/ai-context.ts`: In-memory cache for conversation history.
 - `src/channel-lock.ts`: In-memory manager for channel unlock states.
 - `src/voice/`: Voice transcription subsystem.
-- `services/asr/`: Python ASR sidecar (whisper.cpp + Silero VAD).
+- `services/asr/`: Python ASR sidecar with pluggable engines (Granite, Whisper).
 - `prisma/schema.prisma`: Database schema definition.
 
 ---
@@ -89,21 +89,30 @@ The project includes a `docker-compose.yml` for local development and `docker/do
 
 ### Overview
 
-When the **owner** joins a voice channel, the bot automatically joins and listens. Audio is captured per-speaker, decoded, and streamed to a Python ASR sidecar running **whisper-large-v3-turbo** with a **Vulkan** backend (AMD GPU). Transcripts are normalized using a BDO term glossary and persisted to SQLite. Saying **"Jarvis, \<command\>"** assembles the last 3 minutes of channel-wide context and dispatches it to a pluggable handler (currently logs; future: llamacpp + TTS).
+When the **owner** joins a voice channel, the bot automatically joins and listens. Audio is captured per-speaker, decoded, and streamed to a Python ASR sidecar. The sidecar uses **Silero VAD** for segmentation and a **pluggable engine** for transcription. Transcripts are normalized using a term glossary and persisted to SQLite. Saying **"Jarvis, \<command\>"** assembles the last 3 minutes of channel-wide context and dispatches it to a pluggable handler.
 
 ### Architecture
 
 ```
 Owner joins VC → VoiceStateUpdate → SessionManager
   → VoiceReceiver (per user) → Opus decode → FFmpeg 16kHz mono
-  → ASR WebSocket Client → Python sidecar (Silero VAD + whisper.cpp Vulkan)
+  → ASR WebSocket Client → Python sidecar (Silero VAD + engine)
   → finals → Term Normalizer → SQLite Transcript
                              → ActionRouter (Jarvis trigger)
 ```
 
-### New Environment Variables
+### ASR Engines
 
-Add these to your `.env` / `stack.env`:
+The sidecar supports swappable transcription backends via `ASR_ENGINE` (env var):
+
+| Engine | Default | Model | Backend |
+|---|---|---|---|
+| `granite` | ✅ | granite-speech-4.1-2b | llama-cpp HTTP (`/v1/audio/transcriptions`) |
+| `whisper` | | `openai/whisper-large-v3-turbo` | Local ROCm GPU (transformers) |
+
+Only the selected engine is imported at runtime — selecting `granite` never loads torch-whisper.
+
+### Environment Variables
 
 ```env
 # ASR sidecar connection
@@ -111,34 +120,53 @@ TRANSCRIBE_WS_URL=ws://asr:8765/ws/transcribe
 TRANSCRIBE_HTTP_URL=http://asr:8765
 
 # Voice behaviour
-AUTO_JOIN_OWNER=true              # Auto-join when owner enters a VC
-VOICE_IDLE_TIMEOUT_SEC=900        # Leave after 15 min of silence
-TRIGGER_PHRASE=jarvis             # Wake word for action router
-JARVIS_CONTEXT_SECONDS=180        # Context window size (seconds)
+AUTO_JOIN_OWNER=true
+VOICE_IDLE_TIMEOUT_SEC=900
+TRIGGER_PHRASE=jarvis
+JARVIS_CONTEXT_SECONDS=180
+```
 
-# ASR sidecar (set in docker-compose or sidecar env)
-MODEL_PATH=/app/models/ggml-large-v3-turbo-q5_0.bin
-DEVICE=vulkan                     # vulkan | cpu
-VAD_THRESHOLD=0.5
-END_SILENCE_MS=700
-MAX_UTTERANCE_MS=25000
+**Sidecar env vars:**
+
+```env
+ASR_ENGINE=granite                     # granite | whisper (default: granite)
+
+# Granite / OpenAI-compatible
+ASR_OPENAI_BASE_URL=http://llama-cpp:8080/v1
+ASR_GRANITE_MODEL=/models/granite-speech-4.1-2b-Q6_K.gguf
+ASR_GRANITE_PROMPT=transcribe the speech with proper punctuation and capitalization.
+ASR_GRANITE_MAX_CONCURRENCY=4
+ASR_GRANITE_TIMEOUT_S=30
+
+# Whisper (when ASR_ENGINE=whisper)
+ASR_MODEL_ID=openai/whisper-large-v3-turbo
+ASR_DEVICE=cuda:0
+ASR_DTYPE=float16
+
+# VAD / endpointing (shared)
+ASR_VAD_THRESHOLD=0.50
+ASR_VAD_MIN_SILENCE_MS=500
+ASR_VAD_SPEECH_PAD_MS=300
+ASR_MAX_UTTERANCE_S=10.0
+ASR_ENDPOINT_IDLE_MS=1200
+ASR_ENDPOINT_SILENCE_MS=600
 ```
 
 ### ASR Sidecar Deployment
 
-The sidecar is included in `docker/docker-compose.yml` as the `asr` service. It:
-1. Builds `whisper.cpp` with `WHISPER_VULKAN=ON` at image build time.
-2. Downloads `ggml-large-v3-turbo-q5_0.bin` (~630 MB) on first start into the `asr-models` volume.
-3. Exposes `ws://asr:8765/ws/transcribe` and `http://asr:8765/healthz`.
-4. Requires `/dev/dri` device passthrough for AMD GPU Vulkan access.
+The sidecar uses a base + overlay compose pattern. Example for Granite:
 
-**To use an external sidecar** (e.g. running on a different host), simply omit the `asr` service from compose and set `TRANSCRIBE_WS_URL` / `TRANSCRIBE_HTTP_URL` to point at the remote.
-
-**First-time model download** happens automatically on container start. To pre-download manually:
 ```bash
-docker run --rm -v /path/to/asr-models:/app/models \
-  registry.example.com/paxfax-asr:latest /app/scripts/download-model.sh
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.granite.yml up
 ```
+
+For Whisper (requires ROCm GPU):
+
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.whisper.yml up
+```
+
+The sidecar exposes `ws://asr:8765/ws/transcribe` and `http://asr:8765/healthz`.
 
 ### New Slash Commands (all owner-only, ephemeral)
 

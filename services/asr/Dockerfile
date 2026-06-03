@@ -1,44 +1,35 @@
-# syntax=docker/dockerfile:1.7
-#
-# Moonshine Voice ASR sidecar. CPU only. No Vulkan, no ROCm, no compile-from-source.
-# All the GPU plumbing from the previous (whisper.cpp + Vulkan) image is gone.
-FROM python:3.12-slim AS base
-
-ARG BUILD_SHA=dev
-LABEL org.opencontainers.image.revision="${BUILD_SHA}"
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
-
-# Runtime libs only:
-#   - libgomp1: OpenMP runtime ONNX Runtime links against
-#   - curl: used by the healthcheck and as a fallback fetcher
-#   - ca-certificates: TLS for model downloads
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl libgomp1 \
- && rm -rf /var/lib/apt/lists/*
+ARG BASE_IMAGE=rocm/pytorch:latest
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-COPY services/asr/requirements.txt .
-RUN pip install -r requirements.txt
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/models/hf
+ENV TRANSFORMERS_CACHE=/models/hf
+ENV TORCH_HOME=/models/torch
+ENV ASR_ENGINE=whisper
+ENV ASR_MODEL_ID=openai/whisper-large-v3-turbo
+ENV ASR_DEVICE=cuda:0
+ENV ASR_DTYPE=float16
+ENV ASR_PORT=8765
+ENV ASR_ENABLE_PARTIALS=false
+ENV ASR_LANGUAGE=en
+ENV ASR_TASK=transcribe
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
 
-COPY services/asr/app     ./app
-COPY services/asr/scripts ./scripts
-COPY services/asr/fixtures ./fixtures
-COPY services/asr/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh /app/scripts/*.sh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Bake the English Medium Streaming model into the image so container start is
-# instant and we don't need network access at runtime. The download script is
-# idempotent, so a deferred-download image variant (BAKE_MODEL=false) just runs
-# the same script at first boot.
-ARG BAKE_MODEL=true
-ENV MOONSHINE_MODEL_DIR=/app/models
-ENV MOONSHINE_LANGUAGE=en
-RUN if [ "$BAKE_MODEL" = "true" ]; then /app/scripts/download-model.sh; fi
+COPY services/asr/requirements-whisper.txt /app/requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt
+
+COPY services/asr/app /app/app
 
 EXPOSE 8765
-ENTRYPOINT ["/app/entrypoint.sh"]
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "1"]

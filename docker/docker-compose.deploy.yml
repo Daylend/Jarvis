@@ -1,2 +1,0 @@
-# This file is superseded by the standalone deploy compose files.
-# Use docker-compose.deploy.whisper.yml or docker-compose.deploy.moonshine.yml directly.

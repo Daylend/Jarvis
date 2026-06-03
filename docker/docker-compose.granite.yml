@@ -1,0 +1,34 @@
+services:
+  paxfax:
+    depends_on:
+      asr:
+        condition: service_healthy
+
+  asr:
+    build:
+      context: ..
+      dockerfile: services/asr/Dockerfile.granite
+    restart: unless-stopped
+    environment:
+      - ASR_ENGINE=granite
+      - ASR_OPENAI_BASE_URL=http://llama-cpp:8080/v1
+      - ASR_GRANITE_MODEL=/models/granite-speech-4.1-2b-Q6_K.gguf
+      - ASR_VAD_THRESHOLD=0.50
+      - ASR_VAD_MIN_SILENCE_MS=500
+      - ASR_VAD_SPEECH_PAD_MS=300
+      - ASR_MAX_UTTERANCE_S=10.0
+      - ASR_ENDPOINT_IDLE_MS=1200
+      - ASR_ENDPOINT_SILENCE_MS=600
+    ports:
+      - "8765:8765"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

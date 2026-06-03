@@ -1,4 +1,4 @@
-"""Whisper large-v3-turbo engine singleton with async inference queue."""
+"""Whisper large-v3-turbo engine with async inference queue."""
 from __future__ import annotations
 import asyncio
 import logging
@@ -10,24 +10,23 @@ import numpy as np
 import torch
 from transformers import pipeline
 
-from .config import settings
+from ..config import settings
+from .base import Engine, EngineBusyError
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TranscriptionJob:
-    stream_id: int
-    user_id: str
-    line_id: str
+class _TranscriptionJob:
     audio: np.ndarray
-    start_ms: int
-    end_ms: int
     future: asyncio.Future
 
 
-class WhisperEngine:
+class WhisperEngine(Engine):
+    label: str
+
     def __init__(self):
+        self.label = settings.model_id
         self.device = settings.device if torch.cuda.is_available() else "cpu"
         if settings.dtype == "float16" and self.device != "cpu":
             torch_dtype = torch.float16
@@ -61,18 +60,25 @@ class WhisperEngine:
         load_s = time.monotonic() - t0
         logger.info("Whisper model loaded in %.1fs", load_s)
 
-        self.queue: asyncio.Queue[TranscriptionJob] = asyncio.Queue(
+        self.queue: asyncio.Queue[_TranscriptionJob] = asyncio.Queue(
             maxsize=settings.inference_queue_max
         )
         self._worker_task: Optional[asyncio.Task] = None
 
-    def start(self) -> None:
+    async def start(self) -> None:
         if self._worker_task is None:
             self._worker_task = asyncio.create_task(self._worker())
             logger.info("Inference worker started")
 
-    async def submit(self, job: TranscriptionJob) -> None:
-        self.queue.put_nowait(job)
+    async def transcribe(self, audio: np.ndarray, sample_rate: int) -> dict:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        job = _TranscriptionJob(audio=audio, future=fut)
+        try:
+            self.queue.put_nowait(job)
+        except asyncio.QueueFull:
+            raise EngineBusyError("inference queue full")
+        return await fut
 
     async def _worker(self) -> None:
         try:
@@ -83,8 +89,7 @@ class WhisperEngine:
                     if not job.future.done():
                         job.future.set_result(result)
                 except Exception as exc:
-                    logger.exception("Inference failed for stream=%d line=%s",
-                                     job.stream_id, job.line_id)
+                    logger.exception("Inference failed")
                     if not job.future.done():
                         job.future.set_exception(exc)
                 finally:
@@ -109,12 +114,23 @@ class WhisperEngine:
 
         return {"text": text, "latencyMs": latency_ms}
 
+    def health(self) -> dict:
+        cuda_available = torch.cuda.is_available()
+        return {
+            "engine": "whisper-transformers-rocm",
+            "model": settings.model_id,
+            "device": settings.device,
+            "torch": torch.__version__,
+            "hip": getattr(torch.version, "hip", None),
+            "cudaAvailable": cuda_available,
+            "gpuCount": torch.cuda.device_count() if cuda_available else 0,
+            "gpuName": torch.cuda.get_device_name(0) if cuda_available else None,
+            "queueDepth": self.queue.qsize(),
+        }
 
-_engine: Optional[WhisperEngine] = None
-
-
-def get_engine() -> WhisperEngine:
-    global _engine
-    if _engine is None:
-        _engine = WhisperEngine()
-    return _engine
+    def ready_payload(self) -> dict:
+        return {
+            "engine": "whisper-transformers-rocm",
+            "model": settings.model_id,
+            "vulkan": False,
+        }

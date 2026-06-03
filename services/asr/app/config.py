@@ -1,46 +1,46 @@
-"""
-Configuration for the Moonshine Voice ASR sidecar.
-
-Values come from environment variables. The two MOONSHINE_MODEL_* vars are
-written by services/asr/scripts/download-model.sh into /app/models/moonshine.env
-and sourced by services/asr/entrypoint.sh before uvicorn starts. Do not hand-edit
-moonshine.env — it is generated.
-"""
+"""Configuration for the ASR sidecar. All values from environment."""
+from pydantic import BaseModel
 import os
 
 
-def _bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+class Settings(BaseModel):
+    # --- Engine selection ---
+    engine: str = os.getenv("ASR_ENGINE", "granite")
+
+    # --- Whisper settings ---
+    model_id: str = os.getenv("ASR_MODEL_ID", "openai/whisper-large-v3-turbo")
+    device: str = os.getenv("ASR_DEVICE", "cuda:0")
+    dtype: str = os.getenv("ASR_DTYPE", "float16")
+    language: str = os.getenv("ASR_LANGUAGE", "en")
+    task: str = os.getenv("ASR_TASK", "transcribe")
+    inference_queue_max: int = int(os.getenv("ASR_INFERENCE_QUEUE_MAX", "64"))
+
+    # --- Granite / OpenAI-compatible settings ---
+    openai_base_url: str = os.getenv("ASR_OPENAI_BASE_URL", "http://llama-cpp:8080/v1")
+    granite_model: str = os.getenv("ASR_GRANITE_MODEL", "/models/granite-speech-4.1-2b-Q6_K.gguf")
+    granite_prompt: str = os.getenv(
+        "ASR_GRANITE_PROMPT",
+        "transcribe the speech with proper punctuation and capitalization.",
+    )
+    granite_max_concurrency: int = int(os.getenv("ASR_GRANITE_MAX_CONCURRENCY", "4"))
+    granite_timeout_s: float = float(os.getenv("ASR_GRANITE_TIMEOUT_S", "30"))
+
+    # --- Shared ---
+    port: int = int(os.getenv("ASR_PORT", "8765"))
+    enable_partials: bool = os.getenv("ASR_ENABLE_PARTIALS", "false").lower() == "true"
+    sample_rate: int = 16000
+
+    vad_threshold: float = float(os.getenv("ASR_VAD_THRESHOLD", "0.50"))
+    vad_min_speech_ms: int = int(os.getenv("ASR_VAD_MIN_SPEECH_MS", "200"))
+    vad_min_silence_ms: int = int(os.getenv("ASR_VAD_MIN_SILENCE_MS", "500"))
+    vad_speech_pad_ms: int = int(os.getenv("ASR_VAD_SPEECH_PAD_MS", "300"))
+    max_utterance_s: float = float(os.getenv("ASR_MAX_UTTERANCE_S", "10.0"))
+    min_final_audio_ms: int = int(os.getenv("ASR_MIN_FINAL_AUDIO_MS", "300"))
+
+    endpoint_idle_ms: int = int(os.getenv("ASR_ENDPOINT_IDLE_MS", "1200"))
+    endpoint_silence_ms: int = int(os.getenv("ASR_ENDPOINT_SILENCE_MS", "600"))
+
+    max_buffer_s: float = 32.0
 
 
-# --- Moonshine model selection (set by entrypoint via moonshine.env) ---
-MODEL_PATH: str = os.environ["MOONSHINE_MODEL_PATH"]
-MODEL_ARCH: int = int(os.environ["MOONSHINE_MODEL_ARCH"])
-MODEL_LANG: str = os.environ.get("MOONSHINE_LANGUAGE", "en")
-
-# --- Streaming knobs ---
-UPDATE_INTERVAL: float = float(os.environ.get("MOONSHINE_UPDATE_INTERVAL", "0.15"))
-
-# --- VAD knobs ---
-VAD_THRESHOLD: float = float(os.environ.get("MOONSHINE_VAD_THRESHOLD", "0.3"))
-VAD_WINDOW_DURATION: float = float(os.environ.get("MOONSHINE_VAD_WINDOW_DURATION", "0.3"))
-VAD_LOOK_BEHIND_SAMPLES: int = int(os.environ.get("MOONSHINE_VAD_LOOK_BEHIND_SAMPLES", "8192"))
-VAD_MAX_SEGMENT: float = float(os.environ.get("MOONSHINE_VAD_MAX_SEGMENT_DURATION", "6.0"))
-
-# --- Endpoint flush (silence injection) ---
-ENDPOINT_IDLE_MS: int = int(os.environ.get("ASR_ENDPOINT_IDLE_MS", "1000"))
-ENDPOINT_SILENCE_MS: int = int(os.environ.get("ASR_ENDPOINT_SILENCE_MS", "500"))
-ENDPOINT_FORCE_UPDATES: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATES", "3"))
-ENDPOINT_FORCE_UPDATE_INTERVAL_MS: int = int(os.environ.get("ASR_ENDPOINT_FORCE_UPDATE_INTERVAL_MS", "150"))
-ENDPOINT_MAX_SILENCE_MS: int = int(os.environ.get("ASR_ENDPOINT_MAX_SILENCE_MS", "2000"))
-
-# --- Diagnostics ---
-LOG_ORT_RUNS: bool = _bool("MOONSHINE_LOG_ORT_RUNS", True)
-LOG_OUTPUT_TEXT: bool = _bool("MOONSHINE_LOG_OUTPUT_TEXT", True)
-SAVE_INPUT_WAV_DIR: str = os.environ.get("MOONSHINE_SAVE_INPUT_WAV_DIR", "")  # empty = disabled
-
-# --- Audio contract from the bot ---
-SAMPLE_RATE: int = 16000  # bot sends s16le mono at this rate; do not change
+settings = Settings()

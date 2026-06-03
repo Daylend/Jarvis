@@ -13,15 +13,15 @@ variables:
   DOCKER_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
   LATEST_IMAGE: $DOCKER_REGISTRY/$DOCKER_IMAGE_NAME:latest
 
-  # ASR sidecar image
-  ASR_IMAGE_NAME: paxfax-asr
-  ASR_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:$CI_COMMIT_SHA
-  ASR_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_IMAGE_NAME:latest
-
-  # Whisper ROCm ASR sidecar image
-  ASR_WHISPER_IMAGE_NAME: paxfax-asr-whisper-rocm
+  # ASR sidecar image (Whisper)
+  ASR_WHISPER_IMAGE_NAME: paxfax-asr-whisper
   ASR_WHISPER_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:$CI_COMMIT_SHA
   ASR_WHISPER_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_WHISPER_IMAGE_NAME:latest
+
+  # ASR sidecar image (Granite)
+  ASR_GRANITE_IMAGE_NAME: paxfax-asr-granite
+  ASR_GRANITE_IMAGE: $DOCKER_REGISTRY/$ASR_GRANITE_IMAGE_NAME:$CI_COMMIT_SHA
+  ASR_GRANITE_LATEST_IMAGE: $DOCKER_REGISTRY/$ASR_GRANITE_IMAGE_NAME:latest
 
   # TTS sidecar image
   TTS_IMAGE_NAME: paxfax-tts
@@ -77,27 +77,26 @@ build-docker:
   tags:
     - docker
 
-# ── ASR Sidecar ───────────────────────────────────────────────────────────────
-build-asr:
+# ── ASR Sidecar (Whisper) ────────────────────────────────────────────────────────
+build-asr-whisper:
   stage: build
   image:
     name: moby/buildkit:rootless
     entrypoint: [""]
   before_script: *buildkit-auth
   script:
-    - echo "Building and pushing ASR Docker image..."
+    - echo "Building and pushing Whisper ASR Docker image..."
     - |
       buildctl-daemonless.sh build \
         --frontend dockerfile.v0 \
         --local context=. \
         --local dockerfile=services/asr \
         --opt filename=Dockerfile \
-        --opt build-arg:BUILD_SHA="$CI_COMMIT_SHA" \
-        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr" \
-        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr",mode=max \
-        --output type=image,\"name=$ASR_IMAGE,$ASR_LATEST_IMAGE\",push=true
-    - echo "Successfully pushed $ASR_IMAGE"
-    - echo "Also tagged and pushed as $ASR_LATEST_IMAGE"
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper",mode=max \
+        --output type=image,\"name=$ASR_WHISPER_IMAGE,$ASR_WHISPER_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $ASR_WHISPER_IMAGE"
+    - echo "Also tagged and pushed as $ASR_WHISPER_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
@@ -107,30 +106,30 @@ build-asr:
   tags:
     - docker
 
-# ── ASR Whisper ROCm Sidecar ───────────────────────────────────────────────────
-build-asr-whisper-rocm:
+# ── ASR Sidecar (Granite) ────────────────────────────────────────────────────────
+build-asr-granite:
   stage: build
   image:
     name: moby/buildkit:rootless
     entrypoint: [""]
   before_script: *buildkit-auth
   script:
-    - echo "Building and pushing Whisper ROCm ASR Docker image..."
+    - echo "Building and pushing Granite ASR Docker image..."
     - |
       buildctl-daemonless.sh build \
         --frontend dockerfile.v0 \
         --local context=. \
-        --local dockerfile=services/asr-whisper-rocm \
-        --opt filename=Dockerfile \
-        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper-rocm" \
-        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr-whisper-rocm",mode=max \
-        --output type=image,\"name=$ASR_WHISPER_IMAGE,$ASR_WHISPER_LATEST_IMAGE\",push=true
-    - echo "Successfully pushed $ASR_WHISPER_IMAGE"
-    - echo "Also tagged and pushed as $ASR_WHISPER_LATEST_IMAGE"
+        --local dockerfile=services/asr \
+        --opt filename=Dockerfile.granite \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-asr-granite" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-asr-granite",mode=max \
+        --output type=image,\"name=$ASR_GRANITE_IMAGE,$ASR_GRANITE_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $ASR_GRANITE_IMAGE"
+    - echo "Also tagged and pushed as $ASR_GRANITE_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
-        - services/asr-whisper-rocm/**/*
+        - services/asr/**/*
         - .gitlab-ci.yml
       when: on_success
   tags:
