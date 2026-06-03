@@ -109,7 +109,19 @@ class ActionRouter {
     }
 
     const matches = phraseTriggerRegistry.match(msg.textNormalized, isOwner);
-    for (const t of matches) {
+    const filteredMatches = matches.filter((t) => {
+      if (isOwner) {
+        const wakeWord = config.triggerPhrase.toLowerCase();
+        const hasWakeWordPhrase = t.phrases.some((p) => p.toLowerCase() === wakeWord);
+        if (hasWakeWordPhrase) {
+          console.log(`[jarvis] Skipping wake-word phrase trigger "${t.label || t.id}" for owner to prevent double-firing`);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    for (const t of filteredMatches) {
       phraseTriggerRegistry.touch(t.id);
       if (t.oneShot) {
         const { scheduler } = await import('./scheduler');
