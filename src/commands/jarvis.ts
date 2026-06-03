@@ -251,6 +251,7 @@ export const jarvisCommand: Command = {
             guild: interaction.guild!,
             voiceChannel,
             startedBy: interaction.user.id,
+            client: interaction.client,
           });
           await interaction.editReply(
             `✅ Listening started in **${voiceChannel.name}** (session \`${ctx.id}\`).`,

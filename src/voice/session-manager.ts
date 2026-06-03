@@ -3,7 +3,7 @@ import {
   VoiceConnectionStatus,
   entersState,
 } from '@discordjs/voice';
-import type { Guild, VoiceBasedChannel } from 'discord.js';
+import type { Client, Guild, VoiceBasedChannel } from 'discord.js';
 import { prisma } from '../db';
 import { config } from '../config';
 import type { SessionContext } from './types';
@@ -12,6 +12,7 @@ interface StartOpts {
   guild: Guild;
   voiceChannel: VoiceBasedChannel;
   startedBy: string;
+  client: Client;
 }
 
 class SessionManager {
@@ -120,6 +121,9 @@ class SessionManager {
 
     asrClient.openForSession(ctx);
     perUserReceiver.attach(ctx);
+
+    const { onSessionStart } = await import('./skill-runtime');
+    void onSessionStart(opts.client, ctx);
 
     this.resetIdleTimer(guild.id);
 

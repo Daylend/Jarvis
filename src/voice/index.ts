@@ -1,8 +1,10 @@
 import type { Client } from 'discord.js';
 import { normalizer } from './normalizer';
 import { actionRouter } from './action-router';
-import { createJarvisHandler, handleDmJarvis } from './jarvis-handler';
+import { createJarvisHandler, handleDmJarvis, createTriggerFirer } from './jarvis-handler';
 import { registerOwnerWatch, startupAutoJoin } from './owner-watch';
+import { scheduler } from './scheduler';
+import { phraseTriggerRegistry } from './phrase-trigger-registry';
 
 export { sessionManager } from './session-manager';
 export { normalizer } from './normalizer';
@@ -13,25 +15,24 @@ export { startupAutoJoin } from './owner-watch';
 export { ttsClient } from './tts-client';
 export { handleDmJarvis } from './jarvis-handler';
 export { clearAllHistory } from './jarvis-handler';
+export { scheduler } from './scheduler';
+export { phraseTriggerRegistry } from './phrase-trigger-registry';
 
-/**
- * Bootstrap the voice subsystem.
- * Call once after the Discord client is ready.
- */
 export async function bootstrapVoice(client: Client): Promise<void> {
-  // Load term aliases from DB (seeds from JSON if empty)
   await normalizer.load();
 
-  // Give action router access to the Discord client for display name resolution
   actionRouter.setClient(client);
 
-  // Wire Jarvis LLM handler
   actionRouter.setHandler(createJarvisHandler(client));
 
-  // Register the VoiceStateUpdate handler for owner auto-join
-  registerOwnerWatch(client);
+  const firer = createTriggerFirer(client);
+  actionRouter.setTriggerFirer(firer);
+  scheduler.setFireHandler((trigger) => firer({ trigger, occasion: 'time' }));
 
-  // If the owner is already in a voice channel at startup, join them
+  await phraseTriggerRegistry.loadFromDb();
+  await scheduler.init();
+
+  registerOwnerWatch(client);
   await startupAutoJoin(client);
 
   console.log('[voice] Voice subsystem ready.');

@@ -1,4 +1,5 @@
 import type { Client } from 'discord.js';
+import { config } from '../config';
 import { transcriptStore } from './transcript-store';
 import { noteStore } from './note-store';
 
@@ -467,5 +468,423 @@ toolRegistry.register({
     const deleted = await noteStore.delete(id, context.guildId);
     if (!deleted) return `Note #${id} not found.`;
     return `Deleted note #${id}.`;
+  },
+});
+
+function formatLocalTime(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: config.reminderTimezone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZoneName: 'short',
+  }).format(date);
+}
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'set_reminder',
+      description: 'Schedule a time-based reminder or timer. Provide an instruction for what to do when it fires, AND exactly one of delay_seconds (relative) or fire_at (absolute ISO datetime). Optionally set a label for management, repeat_seconds for recurring timers, and skill name to link to a skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          instruction: { type: 'string', description: 'What Jarvis should do when the reminder fires (e.g. "Announce that PA 1 is up")' },
+          delay_seconds: { type: 'number', description: 'Seconds from now until the reminder fires (use this OR fire_at, not both)' },
+          fire_at: { type: 'string', description: 'Absolute ISO datetime to fire (e.g. "2026-06-03T09:00:00-04:00"). Use this OR delay_seconds, not both.' },
+          label: { type: 'string', description: 'Optional short label for tracking (e.g. "pa-1"). Same-label replaces any existing pending reminder.' },
+          repeat_seconds: { type: 'number', description: 'Optional: seconds between fires for recurring reminders/polling' },
+          skill: { type: 'string', description: 'Optional: skill name to link this trigger to, for lifecycle management' },
+        },
+        required: ['instruction'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const instruction = args.instruction as string;
+    const delaySeconds = args.delay_seconds as number | undefined;
+    const fireAtStr = args.fire_at as string | undefined;
+    const label = args.label as string | undefined;
+    const repeatSeconds = args.repeat_seconds as number | undefined;
+    const skillName = args.skill as string | undefined;
+
+    if (!instruction?.trim()) return 'instruction is required.';
+
+    const hasDelay = delaySeconds !== undefined;
+    const hasFireAt = fireAtStr !== undefined;
+    if (hasDelay === hasFireAt) {
+      return 'Provide exactly one of delay_seconds or fire_at, not both and not neither.';
+    }
+
+    let fireAt: Date;
+    if (hasDelay) {
+      if (typeof delaySeconds !== 'number' || delaySeconds <= 0) {
+        return 'delay_seconds must be a positive number.';
+      }
+      fireAt = new Date(Date.now() + delaySeconds * 1000);
+    } else {
+      const parsed = parseDate(fireAtStr);
+      if (!parsed) return 'Invalid fire_at format. Use ISO datetime, e.g. "2026-06-03T09:00:00-04:00".';
+      if (parsed.getTime() <= Date.now()) return 'fire_at is in the past. Provide a future time.';
+      fireAt = parsed;
+    }
+
+    let skillId: number | null = null;
+    if (skillName) {
+      const { skillStore } = await import('./skill-store');
+      const skill = await skillStore.getByName(config.ownerId, skillName);
+      if (skill) skillId = skill.id;
+    }
+
+    const { triggerStore } = await import('./trigger-store');
+    const { scheduler } = await import('./scheduler');
+
+    if (label) {
+      const existing = await triggerStore.findByLabel(config.ownerId, label);
+      if (existing) {
+        scheduler.cancel(existing.id);
+      }
+    }
+
+    const row = await triggerStore.create({
+      ownerId: config.ownerId,
+      guildId: context.guildId || null,
+      channelId: context.channelId || null,
+      skillId,
+      type: 'time',
+      label: label || null,
+      instruction: instruction.trim(),
+      fireAt,
+      repeatSeconds: repeatSeconds || null,
+    });
+
+    scheduler.schedule(row);
+    return `Reminder #${row.id} scheduled${label ? ` "${label}"` : ''}. Fires at ${formatLocalTime(fireAt)}${repeatSeconds ? `, repeating every ${repeatSeconds}s` : ''}.`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'add_phrase_trigger',
+      description: 'Register a phrase trigger that listens for specific phrases in voice chat and dispatches them to the Jarvis pipeline for gating/action. Phrases are matched with word boundaries (e.g. "pa" will NOT match inside "compare").',
+      parameters: {
+        type: 'object',
+        properties: {
+          phrases: { type: 'array', items: { type: 'string' }, description: 'List of phrase patterns to match (lowercase, e.g. ["pa is up", "pa\'s up", "casting pa"])' },
+          instruction: { type: 'string', description: 'What Jarvis should do when the phrase fires (will be gated — model decides if context genuinely means the event)' },
+          speakers: { type: 'string', description: "Who can trigger: 'anyone' (default) or 'owner'" },
+          cooldown_seconds: { type: 'number', description: 'Minimum seconds between fires (default 0, min 10 if set)' },
+          one_shot: { type: 'boolean', description: 'If true, fires once then auto-cancels' },
+          label: { type: 'string', description: 'Optional short label for management' },
+          skill: { type: 'string', description: 'Optional: skill name to link this trigger to' },
+        },
+        required: ['phrases', 'instruction'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const phrases = args.phrases as string[];
+    const instruction = args.instruction as string;
+    const speakers = (args.speakers as string) || 'anyone';
+    const cooldownSeconds = args.cooldown_seconds as number | undefined;
+    const oneShot = args.one_shot as boolean | undefined;
+    const label = args.label as string | undefined;
+    const skillName = args.skill as string | undefined;
+
+    if (!phrases || phrases.length === 0) return 'phrases array is required.';
+    if (!instruction?.trim()) return 'instruction is required.';
+    if (speakers !== 'anyone' && speakers !== 'owner') return 'speakers must be "anyone" or "owner".';
+
+    if (cooldownSeconds !== undefined && cooldownSeconds < 10) {
+      return 'cooldown_seconds must be at least 10.';
+    }
+
+    const { phraseTriggerRegistry } = await import('./phrase-trigger-registry');
+    const { triggerStore } = await import('./trigger-store');
+    const { skillStore } = await import('./skill-store');
+
+    if (phraseTriggerRegistry.activeCount >= 50) {
+      return 'Too many active phrase triggers (max 50). Cancel some before adding more.';
+    }
+
+    let skillId: number | null = null;
+    if (skillName) {
+      const skill = await skillStore.getByName(config.ownerId, skillName);
+      if (skill) skillId = skill.id;
+    }
+
+    const normPhrases = phrases.map((p: string) => p.toLowerCase().trim());
+
+    const row = await triggerStore.create({
+      ownerId: config.ownerId,
+      guildId: context.guildId || null,
+      channelId: context.channelId || null,
+      skillId,
+      type: 'phrase',
+      label: label || null,
+      instruction: instruction.trim(),
+      phrases: normPhrases,
+      speakers: speakers as 'anyone' | 'owner',
+      cooldownSeconds: cooldownSeconds ?? null,
+      oneShot: oneShot ?? false,
+    });
+
+    phraseTriggerRegistry.add(row);
+    return `Phrase trigger #${row.id} registered${label ? ` "${label}"` : ''}. Listening for: ${normPhrases.join(', ')}.`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'list_triggers',
+      description: 'List all active (pending) triggers for the owner. Returns type, label, status, and timing info.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  async execute(args) {
+    const { triggerStore } = await import('./trigger-store');
+    const rows = await triggerStore.listActive({ ownerId: config.ownerId });
+    if (rows.length === 0) return 'No active triggers.';
+
+    const results = rows.map((r: any) => {
+      const base: any = { id: r.id, type: r.type, label: r.label ?? null, status: r.status };
+      if (r.type === 'time') {
+        base.fireAt = r.fireAt ? formatLocalTime(new Date(r.fireAt)) : null;
+        base.repeatSeconds = r.repeatSeconds ?? null;
+      }
+      if (r.type === 'phrase') {
+        base.phrases = r.phrases ?? [];
+        base.speakers = r.speakers;
+        base.cooldownSeconds = r.cooldownSeconds ?? null;
+        base.oneShot = r.oneShot;
+        base.lastFiredAt = r.lastFiredAt ? formatLocalTime(new Date(r.lastFiredAt)) : null;
+      }
+      return base;
+    });
+
+    return JSON.stringify(results, null, 2);
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'cancel_trigger',
+      description: 'Cancel an active trigger by id or label. Stops the trigger and marks it as canceled.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'Trigger ID to cancel' },
+          label: { type: 'string', description: 'Trigger label to cancel' },
+        },
+        required: [],
+      },
+    },
+  },
+  async execute(args) {
+    const { triggerStore } = await import('./trigger-store');
+    const { scheduler } = await import('./scheduler');
+    const { phraseTriggerRegistry } = await import('./phrase-trigger-registry');
+
+    let trigger: any = null;
+    if (args.id !== undefined) {
+      trigger = await triggerStore.getById(args.id as number);
+    } else if (args.label) {
+      trigger = await triggerStore.findByLabel(config.ownerId, args.label as string);
+    } else {
+      return 'Provide id or label to cancel.';
+    }
+
+    if (!trigger || trigger.status !== 'active') {
+      return `Trigger not found or already inactive.`;
+    }
+
+    scheduler.cancel(trigger.id);
+    phraseTriggerRegistry.remove(trigger.id);
+    return `Trigger #${trigger.id}${trigger.label ? ` "${trigger.label}"` : ''} canceled.`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'save_skill',
+      description: 'Save a reusable skill/playbook. A skill is a named set of instructions Jarvis executes when activated. Use upsert — same name updates the existing skill.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Short name for the skill (e.g. "PA tracking")' },
+          description: { type: 'string', description: 'Brief one-line description (shown in context so Jarvis knows it exists)' },
+          playbook: { type: 'string', description: 'Full instructions Jarvis executes when the skill is started via start_skill. Should describe which triggers/timers to register and how to handle fires.' },
+          auto_start: { type: 'boolean', description: 'If true, automatically activate this skill whenever a voice session starts' },
+        },
+        required: ['name', 'description', 'playbook'],
+      },
+    },
+  },
+  async execute(args, context) {
+    const name = args.name as string;
+    const description = args.description as string;
+    const playbook = args.playbook as string;
+    const autoStart = args.auto_start as boolean | undefined;
+
+    if (!name?.trim() || !description?.trim() || !playbook?.trim()) {
+      return 'name, description, and playbook are all required.';
+    }
+
+    const { skillStore } = await import('./skill-store');
+    const skill = await skillStore.save({
+      ownerId: config.ownerId,
+      guildId: context.guildId || null,
+      name: name.trim(),
+      description: description.trim(),
+      playbook: playbook.trim(),
+      autoStart: autoStart ?? false,
+    });
+
+    return `Skill "${name}" saved (#${skill.id}). Use start_skill "${name}" to activate it.`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'start_skill',
+      description: 'Activate a skill by name. Returns the playbook instructions — read them and execute the steps (register triggers, set timers, etc.) using the available tools. Tag created triggers with skill: "<name>" so stop_skill can tear them down.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the skill to activate' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  async execute(args) {
+    const name = args.name as string;
+    if (!name?.trim()) return 'Skill name is required.';
+
+    const { skillStore } = await import('./skill-store');
+    const skill = await skillStore.getByName(config.ownerId, name.trim());
+    if (!skill) return `Skill "${name}" not found. Use save_skill to create it.`;
+
+    await skillStore.setActive(skill.id, true);
+    return `Skill "${name}" activated. Execute these instructions (tag triggers with skill: "${name}"):\n\n${skill.playbook}`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'stop_skill',
+      description: 'Deactivate a skill and cancel ALL triggers it created (phrase triggers and time reminders).',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the skill to stop' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  async execute(args) {
+    const name = args.name as string;
+    if (!name?.trim()) return 'Skill name is required.';
+
+    const { skillStore } = await import('./skill-store');
+    const skill = await skillStore.getByName(config.ownerId, name.trim());
+    if (!skill) return `Skill "${name}" not found.`;
+
+    const { triggerStore } = await import('./trigger-store');
+    const { scheduler } = await import('./scheduler');
+    const { phraseTriggerRegistry } = await import('./phrase-trigger-registry');
+
+    const canceledIds = await triggerStore.cancelBySkill(skill.id);
+    for (const id of canceledIds) {
+      scheduler.cancelTimer(id);
+      phraseTriggerRegistry.remove(id);
+    }
+
+    await skillStore.setActive(skill.id, false);
+    return `Skill "${name}" stopped. ${canceledIds.length} trigger(s) canceled.`;
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description: 'List all saved skills with their active status.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  async execute() {
+    const { skillStore } = await import('./skill-store');
+    const skills = await skillStore.list(config.ownerId);
+    if (skills.length === 0) return 'No saved skills.';
+
+    const results = skills.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      active: s.active,
+      autoStart: s.autoStart,
+    }));
+    return JSON.stringify(results, null, 2);
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'delete_skill',
+      description: 'Permanently delete a skill by name. Also cancels any active triggers owned by it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the skill to delete' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  async execute(args) {
+    const name = args.name as string;
+    if (!name?.trim()) return 'Skill name is required.';
+
+    const { skillStore } = await import('./skill-store');
+    const skill = await skillStore.getByName(config.ownerId, name.trim());
+    if (!skill) return `Skill "${name}" not found.`;
+
+    const { triggerStore } = await import('./trigger-store');
+    const { scheduler } = await import('./scheduler');
+    const { phraseTriggerRegistry } = await import('./phrase-trigger-registry');
+
+    const canceledIds = await triggerStore.cancelBySkill(skill.id);
+    for (const id of canceledIds) {
+      scheduler.cancelTimer(id);
+      phraseTriggerRegistry.remove(id);
+    }
+
+    await skillStore.delete(skill.id);
+    return `Skill "${name}" deleted${canceledIds.length > 0 ? ` (${canceledIds.length} triggers canceled)` : ''}.`;
   },
 });

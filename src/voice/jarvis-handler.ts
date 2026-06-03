@@ -4,21 +4,20 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'dis
 import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
 import { noteStore } from './note-store';
+import { skillStore } from './skill-store';
 import { personalityStore } from './personality-store';
 import { llmProviderStore } from './llm-provider-store';
-import type { CommandHandler, JarvisPayload } from './action-router';
+import type { CommandHandler, JarvisPayload, SessionContext } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
 const guildHistory = new Map<string, ChatMessage[]>();
 const guildLock = new Map<string, Promise<void>>();
 
-/** Clear conversation history for a guild (call on session teardown). */
 export function clearGuildHistory(guildId: string): void {
   guildHistory.delete(guildId);
   guildLock.delete(guildId);
 }
 
-/** Clear ALL Jarvis conversation history (all guilds + DMs). */
 export function clearAllHistory(): void {
   guildHistory.clear();
   guildLock.clear();
@@ -44,13 +43,25 @@ interface JarvisLoopOpts {
   channelId: string;
   replyFn: (text: string) => Promise<void>;
   errorFn: (text: string) => Promise<void>;
+  suppressEmptyFallback?: boolean;
 }
 
-/**
- * Rough token estimate: ~4 chars per token for English text.
- * Conservative enough to prevent context overflow without needing
- * a real tokenizer. Tool call arguments count toward the estimate.
- */
+interface TriggerFirePayload {
+  trigger: {
+    id: number;
+    ownerId: string;
+    guildId?: string | null;
+    channelId?: string | null;
+    label?: string | null;
+    instruction: string;
+    phrases?: string[];
+    type: string;
+  };
+  occasion: 'time' | 'phrase' | 'skill-autostart';
+  matchedUtterance?: string;
+  ctx?: SessionContext;
+}
+
 function estimateTokens(messages: ChatMessage[]): number {
   let totalChars = 0;
   for (const m of messages) {
@@ -98,6 +109,15 @@ function buildUserPrompt(payload: JarvisPayload): BuiltPrompt {
   }
 
   return { command, contextPreamble };
+}
+
+function formatCurrentTime(): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: config.reminderTimezone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZoneName: 'short',
+  }).format(new Date());
 }
 
 function sanitizeLlmContent(raw: string | null): string | null {
@@ -158,7 +178,7 @@ async function requestApproval(
 }
 
 async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
-  const { client, historyKey, command, contextPreamble, guildId, channelId, replyFn, errorFn } = opts;
+  const { client, historyKey, command, contextPreamble, guildId, channelId, replyFn, errorFn, suppressEmptyFallback } = opts;
 
   const prev = guildLock.get(historyKey) ?? Promise.resolve();
   let releaseLock: () => void;
@@ -190,6 +210,16 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       }
     }
 
+    try {
+      const skillRows = await skillStore.summaries(config.ownerId);
+      if (skillRows.length > 0) {
+        const lines = skillRows.map((s: any) => `- ${s.name} — ${s.description}${s.active ? ' [active]' : ''}`);
+        systemPrompt += `\n\nYOUR SKILLS (activate by name with start_skill):\n${lines.join('\n')}`;
+      }
+    } catch (err) {
+      console.warn('[jarvis] Failed to load skills for context injection:', err);
+    }
+
     const tokenBudget = config.llmContextLength - config.llmMaxTokens;
     const estimateCurrentSize = (): number => {
       const preview: ChatMessage[] = [
@@ -212,11 +242,13 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       ...history,
     ];
 
+    const nowLine = `Current time: ${formatCurrentTime()} (${config.reminderTimezone})`;
+
     let userContent: string;
     if (contextPreamble) {
-      userContent = `[VOICE CHANNEL]\n${contextPreamble}\n\n[COMMAND]\n${command}`;
+      userContent = `${nowLine}\n\n[VOICE CHANNEL]\n${contextPreamble}\n\n[COMMAND]\n${command}`;
     } else {
-      userContent = `[COMMAND]\n${command}`;
+      userContent = `${nowLine}\n\n[COMMAND]\n${command}`;
     }
 
     const historyStart = messages.length;
@@ -377,7 +409,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     } else {
       console.warn(`[jarvis] No final response after ${iterCount} iterations (${elapsed}ms)`);
 
-      if (messages.length > 0) {
+      if (!suppressEmptyFallback && messages.length > 0) {
         const lastContent = messages
           .filter((m) => m.role === 'assistant' && m.content)
           .pop()?.content;
@@ -389,6 +421,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             }
           } catch {} // eslint-disable-line no-empty
         }
+      } else if (suppressEmptyFallback) {
+        console.log('[jarvis] Empty fallback suppressed (trigger silence)');
       }
     }
   } finally {
@@ -418,11 +452,88 @@ export function createJarvisHandler(client: Client): CommandHandler {
   };
 }
 
-/**
- * Handle a DM from the owner through the Jarvis pipeline.
- * Uses the same LLM loop, tools, and system prompt as voice commands.
- * If the owner has an active voice session, includes recent voice context.
- */
+export function createTriggerFirer(client: Client): (payload: TriggerFirePayload) => Promise<void> {
+  return async ({ trigger, occasion, matchedUtterance, ctx }) => {
+    // Lazy-import to break circular dependency
+    const { sessionManager } = await import('./session-manager');
+
+    let guildId = '';
+    let channelId = '';
+    let inVoice = false;
+    let channelName = '';
+
+    if (trigger.guildId) {
+      const session = sessionManager.get(trigger.guildId);
+      if (session) {
+        guildId = session.guildId;
+        channelId = session.channelId;
+        inVoice = true;
+        try {
+          const guild = client.guilds.cache.get(guildId);
+          const channel = guild?.channels.cache.get(channelId);
+          channelName = channel?.name ?? '';
+        } catch {}
+      }
+    }
+
+    if (!inVoice) {
+      for (const [gId] of client.guilds.cache) {
+        const session = sessionManager.get(gId);
+        if (session) {
+          guildId = session.guildId;
+          channelId = session.channelId;
+          inVoice = true;
+          try {
+            const guild = client.guilds.cache.get(guildId);
+            const channel = guild?.channels.cache.get(channelId);
+            channelName = channel?.name ?? '';
+          } catch {}
+          break;
+        }
+      }
+    }
+
+    if (!inVoice) {
+      guildId = '';
+      channelId = '';
+    }
+
+    const historyKey = inVoice ? guildId : `dm:${config.ownerId}`;
+
+    const voiceLine = inVoice
+      ? `You are currently in voice channel "${channelName}".`
+      : `You are NOT currently in any voice channel.`;
+
+    let command: string;
+    if (occasion === 'phrase') {
+      const labelLine = trigger.label ? ` — label "${trigger.label}"` : '';
+      command = `[PHRASE TRIGGER fired${labelLine}]\nHeard: "${matchedUtterance ?? ''}"\n${voiceLine}\nOriginal instruction: "${trigger.instruction}"\n\nDecide if this genuinely indicates the event described. If not, take no action and stay silent.`;
+    } else if (occasion === 'time') {
+      const labelLine = trigger.label ? ` — label "${trigger.label}"` : '';
+      command = `[TIME REMINDER fired${labelLine}]\n${voiceLine}\nInstruction: "${trigger.instruction}"`;
+    } else {
+      command = `[SKILL AUTOSTART]\n${voiceLine}\nInstruction: "${trigger.instruction}"`;
+    }
+
+    const replyFn = async (text: string) => {
+      const owner = await client.users.fetch(config.ownerId);
+      await owner.send(text);
+    };
+
+    await runJarvisLoop({
+      client,
+      historyKey,
+      command,
+      contextPreamble: null,
+      guildId,
+      channelId,
+      replyFn,
+      errorFn: replyFn,
+      suppressEmptyFallback: occasion === 'phrase',
+    });
+  };
+}
+
 export async function handleDmJarvis(client: Client, message: Message): Promise<void> {
   const historyKey = `dm:${config.ownerId}`;
   const command = message.content.trim();

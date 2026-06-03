@@ -2,8 +2,10 @@ import type { Client, VoiceBasedChannel } from 'discord.js';
 import { config } from '../config';
 import { transcriptStore } from './transcript-store';
 import type { SessionContext, AsrMessage } from './types';
+import { phraseTriggerRegistry } from './phrase-trigger-registry';
 
-/** Milliseconds offset from session start, formatted as mm:ss */
+export type { SessionContext } from './types';
+
 function formatStamp(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
   const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
@@ -22,6 +24,13 @@ export interface JarvisPayload {
 
 export type CommandHandler = (payload: JarvisPayload) => Promise<void>;
 
+export type TriggerFirer = (payload: {
+  trigger: any;
+  occasion: 'time' | 'phrase' | 'skill-autostart';
+  matchedUtterance?: string;
+  ctx?: SessionContext;
+}) => Promise<void>;
+
 class ActionRouter {
   private client: Client | null = null;
 
@@ -29,10 +38,6 @@ class ActionRouter {
     this.client = client;
   }
 
-  /**
-   * Pluggable handler — replace this to wire in llamacpp + TTS.
-   * Default: log the payload to console.
-   */
   private handler: CommandHandler = async (p) => {
     console.log(`[jarvis] command: "${p.command}"`);
     console.log(`[jarvis] context window (${config.jarvisContextSeconds}s):\n${p.contextBlock || '(empty)'}`);
@@ -42,71 +47,84 @@ class ActionRouter {
     this.handler = h;
   }
 
-  /** Called for every partial segment — reserved for future low-latency wake-word detection. */
-  onPartial(_ctx: SessionContext, _msg: AsrMessage): void {
-    // TODO: low-latency wake-word pre-detection
+  private triggerFirer: TriggerFirer = async () => {};
+
+  setTriggerFirer(fn: TriggerFirer): void {
+    this.triggerFirer = fn;
   }
 
-  /**
-   * Called for every finalized segment.
-   * If the segment is from the owner and contains the trigger phrase,
-   * assembles the Jarvis payload and dispatches to the handler.
-   */
+  onPartial(_ctx: SessionContext, _msg: AsrMessage): void {
+  }
+
   async onFinal(
     ctx: SessionContext,
     msg: AsrMessage & { textNormalized: string; userId: string },
   ): Promise<void> {
-    if (msg.userId !== config.ownerId) return;
+    const isOwner = msg.userId === config.ownerId;
 
-    // If we already dispatched this utterance from an early partial or timer,
-    // the final is just a correction — log it and skip.
-    if (msg.streamId !== undefined && msg.lineId !== undefined) {
-      const key = `${msg.streamId}:${msg.lineId}`;
-      // Cancel any still-running early-dispatch timer.
-      this.cancelEarlyTimer(key);
-      if (this.dispatchedKeys.has(key)) {
-        const finalText = msg.textNormalized ?? '';
-        const dispatchedText = this.dispatchedTexts.get(key) ?? '';
-        if (finalText !== dispatchedText) {
-          console.log(`[jarvis] final correction lineId=${msg.lineId}: "${finalText}" (dispatched as "${dispatchedText}")`);
-        } else {
-          console.log(`[jarvis] final for already-dispatched utterance lineId=${msg.lineId} — skipping`);
+    if (isOwner) {
+      if (msg.streamId !== undefined && msg.lineId !== undefined) {
+        const key = `${msg.streamId}:${msg.lineId}`;
+        this.cancelEarlyTimer(key);
+        if (this.dispatchedKeys.has(key)) {
+          const finalText = msg.textNormalized ?? '';
+          const dispatchedText = this.dispatchedTexts.get(key) ?? '';
+          if (finalText !== dispatchedText) {
+            console.log(`[jarvis] final correction lineId=${msg.lineId}: "${finalText}" (dispatched as "${dispatchedText}")`);
+          } else {
+            console.log(`[jarvis] final for already-dispatched utterance lineId=${msg.lineId} — skipping`);
+          }
+          this.dispatchedKeys.delete(key);
+          this.dispatchedTexts.delete(key);
         }
-        this.dispatchedKeys.delete(key);
-        this.dispatchedTexts.delete(key);
-        return;
+      }
+
+      if (!this.dispatchedKeys.has(`${msg.streamId}:${msg.lineId}`)) {
+        const trigger = config.triggerPhrase.toLowerCase();
+        const normalized = msg.textNormalized.toLowerCase();
+        const idx = normalized.indexOf(trigger);
+        if (idx >= 0) {
+          const after = msg.textNormalized
+            .slice(idx + trigger.length)
+            .replace(/^[\s,.;:!?-]+/, '')
+            .trim();
+
+          const before = msg.textNormalized
+            .slice(0, idx)
+            .replace(/[\s,.;:!?-]+$/, '')
+            .trim();
+
+          const command = after || before;
+
+          if (command) {
+            console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId} command="${command}"`);
+            void this.dispatchJarvis(ctx, msg, command).catch((err) =>
+              console.error('[jarvis] Handler error:', err),
+            );
+          } else {
+            console.log(`[jarvis] Trigger detected but no command text found. Ignoring.`);
+          }
+        }
       }
     }
 
-    const trigger = config.triggerPhrase.toLowerCase();
-    const normalized = msg.textNormalized.toLowerCase();
-    const idx = normalized.indexOf(trigger);
-    if (idx < 0) return;
-
-    // Extract command text: try after the trigger word first, fall back to
-    // text before the trigger (end-of-sentence addressing like "What do you think Jarvis?")
-    const after = msg.textNormalized
-      .slice(idx + trigger.length)
-      .replace(/^[\s,.;:!?-]+/, '')
-      .trim();
-
-    const before = msg.textNormalized
-      .slice(0, idx)
-      .replace(/[\s,.;:!?-]+$/, '')
-      .trim();
-
-    const command = after || before;
-
-    if (!command) {
-      console.log(`[jarvis] Trigger detected but no command text found. Ignoring.`);
-      return;
+    const matches = phraseTriggerRegistry.match(msg.textNormalized, isOwner);
+    for (const t of matches) {
+      phraseTriggerRegistry.touch(t.id);
+      if (t.oneShot) {
+        const { scheduler } = await import('./scheduler');
+        void scheduler.cancel(t.id);
+        phraseTriggerRegistry.remove(t.id);
+      }
+      void this.triggerFirer({
+        trigger: t,
+        occasion: 'phrase',
+        matchedUtterance: msg.textNormalized,
+        ctx,
+      }).catch((err) => console.error('[jarvis] Trigger firer error:', err));
     }
-
-    console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId} command="${command}"`);
-    await this.dispatchJarvis(ctx, msg, command);
   }
 
-  /** Shared dispatch: fetches context window and invokes the handler. */
   private async dispatchJarvis(
     ctx: SessionContext,
     msg: AsrMessage & { textNormalized: string; userId: string },
@@ -165,38 +183,20 @@ class ActionRouter {
       ownerStartMs: msg.startMs ?? 0,
     };
 
-    try {
-      await this.handler(payload);
-    } catch (err) {
-      console.error('[jarvis] Handler error:', err);
-    }
+    await this.handler(payload);
   }
 
   private static readonly PARTIAL_TRACKING_MAX = 1024;
 
-  /** Maps "streamId:lineId" to a running early-dispatch timer and the latest
-   *  command tail text. On first partial with trigger+tail, a real setTimeout
-   *  is started; subsequent partials update the tail; the timer fires with
-   *  whatever tail is current when the cutoff is reached. */
   private partialFirstSeen = new Map<string, {
     firstSeenAt: number;
     latestTail: string;
     timer: ReturnType<typeof setTimeout>;
   }>();
-  /** FIFO key order for bounded eviction of partialFirstSeen. */
   private partialKeyOrder: string[] = [];
-  /** Keys we've already dispatched from a partial — prevents double-fires. */
   private dispatchedKeys = new Set<string>();
-  /** Dispatched command text for correction logging when the final arrives. */
   private dispatchedTexts = new Map<string, string>();
 
-  /**
-   * Called for every partial from the owner. On the first partial containing
-   * the trigger phrase + ≥2 command words, starts a real setTimeout for
-   * config.earlyJarvisCutoffMs. Subsequent partials update the latest tail
-   * text. When the timer fires (or the final arrives first), dispatches the
-   * Jarvis handler with the best text available at that moment.
-   */
   noteEarlyJarvis(
     ctx: SessionContext,
     msg: AsrMessage & { textNormalized: string; userId: string },
@@ -218,7 +218,6 @@ class ActionRouter {
       .trim();
     let tailWords = tail.split(/\s+/).filter(Boolean);
     if (tailWords.length < 2) {
-      // Fall back to text before the trigger (end-of-sentence addressing)
       tail = msg.textNormalized
         .slice(0, idx)
         .replace(/[\s,.;:!?-]+$/, '')
@@ -227,18 +226,14 @@ class ActionRouter {
     }
     if (tailWords.length < 2) return;
 
-    // --- Time-based cutoff with a real timer ---------------------------
     const existing = this.partialFirstSeen.get(key);
 
     if (existing) {
-      // Already tracking this key — update the latest tail text.
       existing.latestTail = tail;
       console.log(`[jarvis] early candidate (update) streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" cutoffIn=${Math.round((config.earlyJarvisCutoffMs - (Date.now() - existing.firstSeenAt)) / 100) / 10}s`);
       return;
     }
 
-    // First time seeing this key — record it, start a real timer, and
-    // maintain FIFO eviction bounds.
     this.partialKeyOrder.push(key);
     while (this.partialKeyOrder.length > ActionRouter.PARTIAL_TRACKING_MAX) {
       const oldest = this.partialKeyOrder.shift()!;
@@ -257,10 +252,7 @@ class ActionRouter {
       timer: null as any as ReturnType<typeof setTimeout>,
     };
 
-    // Start a real setTimeout — fires even if no further partials arrive
-    // (e.g. Moonshine hangs after the user stops speaking).
     entry.timer = setTimeout(() => {
-      // Guard: already dispatched from a final? Cleaned up?
       const cur = this.partialFirstSeen.get(key);
       if (!cur) return;
 
@@ -281,10 +273,6 @@ class ActionRouter {
     console.log(`[jarvis] early candidate (first) streamId=${msg.streamId} lineId=${msg.lineId} tail="${tail}" timerStarted=${config.earlyJarvisCutoffMs}ms`);
   }
 
-  /**
-   * Cancel any pending early-dispatch timer for a key. Called from onFinal()
-   * when the final arrives before the timer fires.
-   */
   private cancelEarlyTimer(key: string): void {
     const entry = this.partialFirstSeen.get(key);
     if (entry) {

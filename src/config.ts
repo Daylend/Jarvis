@@ -154,6 +154,8 @@ const envSchema = z.object({
   PERSONALITIES_DIR: z.string().default('/app/personalities'),
   DEFAULT_PERSONALITY: z.string().default('jarvis'),
   PERSONALITY_STATE_PATH: z.string().default('/app/data/personality-state.json'),
+  // Reminders / triggers
+  REMINDER_TIMEZONE: z.string().default('America/New_York'),
 });
 const env = envSchema.parse(process.env);
 
@@ -193,4 +195,6 @@ export const config = {
   personalitiesDir: env.PERSONALITIES_DIR,
   defaultPersonality: env.DEFAULT_PERSONALITY,
   personalityStatePath: env.PERSONALITY_STATE_PATH,
+  // Reminders / triggers
+  reminderTimezone: env.REMINDER_TIMEZONE,
 };

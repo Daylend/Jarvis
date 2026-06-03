@@ -67,3 +67,43 @@ model TermAlias {
   @@unique([canonical, alias], name: "canonical_alias")
   @@index([alias])
 }
+
+model Skill {
+  id          Int       @id @default(autoincrement())
+  ownerId     String
+  guildId     String?
+  name        String
+  description String
+  playbook    String
+  autoStart   Boolean   @default(false)
+  active      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  triggers    Trigger[]
+
+  @@unique([ownerId, name])
+}
+
+model Trigger {
+  id              Int       @id @default(autoincrement())
+  ownerId         String
+  guildId         String?
+  channelId       String?
+  skillId         Int?
+  skill           Skill?    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  type            String
+  label           String?
+  instruction     String
+  fireAt          DateTime?
+  repeatSeconds   Int?
+  phrases         String?
+  speakers        String    @default("anyone")
+  cooldownSeconds Int?
+  enabled         Boolean   @default(true)
+  oneShot         Boolean   @default(false)
+  status          String    @default("active")
+  lastFiredAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([type, status])
+  @@index([ownerId, status])
+}

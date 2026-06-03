@@ -30,6 +30,7 @@ export async function startupAutoJoin(client: Client): Promise<void> {
         guild,
         voiceChannel,
         startedBy: config.ownerId,
+        client,
       });
     } catch (err) {
       const msg = (err as Error).message ?? '';
@@ -90,6 +91,7 @@ export function registerOwnerWatch(client: Client): void {
               guild: newState.guild,
               voiceChannel: ownerChannel,
               startedBy: config.ownerId,
+              client,
             });
           } else {
             // Owner is not in voice — nothing to rejoin, stop the session
@@ -128,6 +130,7 @@ export function registerOwnerWatch(client: Client): void {
           guild: newState.guild,
           voiceChannel: channel,
           startedBy: config.ownerId,
+          client,
         });
       } catch (err) {
         const msg = (err as Error).message ?? '';
