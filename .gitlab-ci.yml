@@ -175,9 +175,15 @@ build-tts-chatterbox:
   image:
     name: moby/buildkit:rootless
     entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: "--oci-worker-no-process-sandbox --root /cache/buildkit-root"
   before_script: *buildkit-auth
   script:
-    - echo "Building and pushing TTS Chatterbox Docker image..."
+    - id
+    - echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+    - df -h /run /run/user/1000 /tmp /cache || true
+    - mount | grep -E 'run|tmpfs|cache' || true
+    - mkdir -p /cache/buildkit-root "$BUILDKIT_CACHE_DIR/paxfax-tts-chatterbox"
     - |
       buildctl-daemonless.sh build \
         --frontend dockerfile.v0 \
@@ -185,10 +191,10 @@ build-tts-chatterbox:
         --local dockerfile=services/tts \
         --opt filename=Dockerfile.chatterbox \
         --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-tts-chatterbox" \
-        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-tts-chatterbox",mode=max \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-tts-chatterbox",mode=min \
         --output type=image,\"name=$TTS_CHATTERBOX_IMAGE,$TTS_CHATTERBOX_LATEST_IMAGE\",push=true
-    - echo "Successfully pushed $TTS_CHATTERBOX_IMAGE"
-    - echo "Also tagged and pushed as $TTS_CHATTERBOX_LATEST_IMAGE"
+      - echo "Successfully pushed $TTS_CHATTERBOX_IMAGE"
+      - echo "Also tagged and pushed as $TTS_CHATTERBOX_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
