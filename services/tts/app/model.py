@@ -17,6 +17,10 @@ CURRENT_VOICE = None
 DEVICE = None
 SAMPLE_RATE = None
 SPEED = 1.0
+N_FE_STEP = None
+EPSS_ACTIVE = None
+
+EPSS_NFE_STEPS = frozenset({5, 6, 7, 10, 12, 16})
 
 
 def _save_settings():
@@ -55,6 +59,8 @@ def get_engine_info() -> dict:
         "engine": "f5-tts",
         "device": DEVICE or "not-loaded",
         "sample_rate": SAMPLE_RATE or 0,
+        "nfe_step": N_FE_STEP,
+        "epss_active": EPSS_ACTIVE,
     }
     if MODEL is not None:
         try:
@@ -128,7 +134,7 @@ def set_ref_audio(path: str):
 
 
 def _ensure_loaded():
-    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE, CURRENT_VOICE, SPEED
+    global MODEL, VOCODER, REF_AUDIO, REF_TEXT, DEVICE, SAMPLE_RATE, CURRENT_VOICE, SPEED, N_FE_STEP, EPSS_ACTIVE
     if MODEL is not None:
         return
 
@@ -140,6 +146,8 @@ def _ensure_loaded():
         TTS_SPEED,
         TTS_VOCODER_NAME,
         TTS_TORCH_COMPILE,
+        TTS_CFG_STEPS,
+        TTS_CFG_STRENGTH,
     )
 
     DEVICE = TTS_DEVICE
@@ -219,17 +227,33 @@ def _ensure_loaded():
         if saved_speed is not None:
             set_speed(float(saved_speed))
 
+    N_FE_STEP = TTS_CFG_STEPS
+    EPSS_ACTIVE = TTS_CFG_STEPS in EPSS_NFE_STEPS
+    if not EPSS_ACTIVE:
+        logger.warning(
+            "EPSS DISABLED: TTS_CFG_STEPS=%d is not in %s. "
+            "Falling back to uniform linspace sampling — quality at low NFE will degrade. "
+            "Valid EPSS step counts: %s",
+            TTS_CFG_STEPS, sorted(EPSS_NFE_STEPS), sorted(EPSS_NFE_STEPS),
+        )
+    logger.info(
+        "F5-TTS inference recipe: nfe_step=%d cfg_strength=%.1f sway=-1.0 "
+        "vocoder=%s epss=%s",
+        TTS_CFG_STEPS, TTS_CFG_STRENGTH, TTS_VOCODER_NAME, EPSS_ACTIVE,
+    )
+
     logger.info("F5-TTS model loaded. device=%s", DEVICE)
 
 def _warmup():
     import time as time_mod
     _ensure_loaded()
 
-    from app.config import TTS_CFG_STRENGTH
+    from app.config import TTS_CFG_STEPS, TTS_CFG_STRENGTH
     from f5_tts.infer.utils_infer import infer_process
 
     cfg_val = TTS_CFG_STRENGTH
-    logger.info("Running TTS warmup inference (cfg_strength=%s)...", cfg_val)
+    nfe = TTS_CFG_STEPS
+    logger.info("Running TTS warmup inference (nfe_step=%s, cfg_strength=%s)...", nfe, cfg_val)
 
     global REF_AUDIO, REF_TEXT
     if REF_AUDIO is None or REF_TEXT is None:
@@ -243,7 +267,7 @@ def _warmup():
         gen_text="Warmup.",
         model_obj=MODEL,
         vocoder=VOCODER,
-        nfe_step=4,
+        nfe_step=nfe,
         cfg_strength=cfg_val,
         sway_sampling_coef=-1.0,
         speed=SPEED,

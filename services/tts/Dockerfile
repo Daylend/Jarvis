@@ -10,8 +10,12 @@ ENV TTS_DEVICE=cuda:0
 ENV TTS_PORT=8860
 ENV TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
 ENV TTS_VOCODER_NAME=vocos
+# EPSS step count: must be one of {5,6,7,10,12,16} or EPSS falls back to uniform linspace.
+# 12=baseline, 10=balanced, 7=fastest (validate on voice clones before deploying 7).
 ENV TTS_CFG_STEPS=12
-ENV TTS_CFG_STRENGTH=0.0
+# CFG strength: 2.0 = full classifier-free guidance (EPSS paper recipe).
+# 0.0 was unstable in testing; do not set below 1e-5 without validating.
+ENV TTS_CFG_STRENGTH=2.0
 ENV TTS_TORCH_COMPILE=true
 ENV OMP_NUM_THREADS=2
 ENV MKL_NUM_THREADS=1

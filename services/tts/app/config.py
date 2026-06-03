@@ -8,8 +8,13 @@ TTS_REF_TEXT = os.getenv(
     "I'm sorry I know you mean well... You just didn't think it through.",
 )
 TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
+# Valid EPSS step counts (use_epss=True by default upstream).
+# Must be one of {5, 6, 7, 10, 12, 16} or EPSS silently falls back to uniform linspace.
+# Recommended: 12=baseline, 10=balanced, 7=fastest (validate on voice clones).
 TTS_CFG_STEPS = int(os.getenv("TTS_CFG_STEPS", "12"))
-TTS_CFG_STRENGTH = float(os.getenv("TTS_CFG_STRENGTH", "0.0"))
+# CFG strength 2.0 = full classifier-free guidance (paper recipe).
+# Values < 1e-5 skip CFG entirely; 0.0 was unstable in testing.
+TTS_CFG_STRENGTH = float(os.getenv("TTS_CFG_STRENGTH", "2.0"))
 TTS_TORCH_COMPILE = os.getenv("TTS_TORCH_COMPILE", "true").lower() == "true"
 TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 TTS_VOCODER_NAME = os.getenv("TTS_VOCODER_NAME", "vocos")

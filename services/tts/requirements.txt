@@ -4,7 +4,7 @@ uvicorn[standard]
 numpy
 torch
 torchaudio
-f5-tts
+f5-tts>=1.1.7,<2
 cached-path
 soundfile
 x-transformers

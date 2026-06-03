@@ -97,8 +97,10 @@ services:
       - TTS_DEVICE=cuda:0
       - TTS_REF_AUDIO=/app/voice_samples/ultron.wav
       - TTS_VOCODER_NAME=vocos
+      # EPSS step count: must be one of {5,6,7,10,12,16} (12=baseline).
       - TTS_CFG_STEPS=${TTS_CFG_STEPS:-12}
-      - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-0.0}
+      # CFG strength 2.0 = full guidance (paper recipe). 0.0 was unstable.
+      - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-2.0}
       - TTS_TORCH_COMPILE=${TTS_TORCH_COMPILE:-true}
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
