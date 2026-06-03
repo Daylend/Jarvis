@@ -474,8 +474,11 @@ toolRegistry.register({
 function formatLocalTime(date: Date): string {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: config.reminderTimezone,
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
     timeZoneName: 'short',
   }).format(date);
 }
