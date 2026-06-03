@@ -7,7 +7,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.config import TTS_PORT
-from app import model as tts_model
+_TTS_ENGINE = os.getenv("TTS_ENGINE", "f5").lower()
+if _TTS_ENGINE == "chatterbox":
+    from app import model_chatterbox as tts_model
+else:
+    from app import model as tts_model
 
 logging.basicConfig(
     level=logging.INFO,

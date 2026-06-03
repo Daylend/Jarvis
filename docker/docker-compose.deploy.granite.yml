@@ -81,7 +81,9 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   tts:
+    # To use Chatterbox Turbo, switch image tag below and set TTS_ENGINE=chatterbox
     image: registry.example.com/paxfax-tts:latest
+    # image: registry.example.com/paxfax-tts-chatterbox:latest
     container_name: paxfax-tts
     restart: unless-stopped
     devices:
@@ -94,16 +96,22 @@ services:
     security_opt:
       - seccomp=unconfined
     environment:
+      - TTS_ENGINE=${TTS_ENGINE:-f5}
       - TTS_DEVICE=cuda:0
-      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav
-      - TTS_VOCODER_NAME=vocos
-      # EPSS step count: must be one of {5,6,7,10,12,16} (12=baseline).
-      - TTS_CFG_STEPS=${TTS_CFG_STEPS:-12}
-      # CFG strength 2.0 = full guidance (paper recipe). 0.0 was unstable.
-      - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-2.0}
-      - TTS_TORCH_COMPILE=${TTS_TORCH_COMPILE:-true}
+      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav # Switch to ultron.mp3 if using Chatterbox
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
+      # F5-TTS specific config (ignored if TTS_ENGINE=chatterbox)
+      - TTS_VOCODER_NAME=vocos
+      - TTS_CFG_STEPS=${TTS_CFG_STEPS:-12}
+      - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-2.0}
+      - TTS_TORCH_COMPILE=${TTS_TORCH_COMPILE:-true}
+      # Chatterbox Turbo specific config (ignored if TTS_ENGINE=f5)
+      - CHATTERBOX_TEMPERATURE=${CHATTERBOX_TEMPERATURE:-0.8}
+      - CHATTERBOX_TOP_P=${CHATTERBOX_TOP_P:-0.95}
+      - CHATTERBOX_TOP_K=${CHATTERBOX_TOP_K:-1000}
+      - CHATTERBOX_REPETITION_PENALTY=${CHATTERBOX_REPETITION_PENALTY:-1.2}
+      - CHATTERBOX_NORM_LOUDNESS=${CHATTERBOX_NORM_LOUDNESS:-true}
     volumes:
       - /srv/docker/appdata/paxfax/voice_samples:/app/voice_samples
       - /srv/docker/appdata/paxfax/tts-models:/models
@@ -112,7 +120,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 300s
+      start_period: 600s
     logging:
       driver: "json-file"
       options:

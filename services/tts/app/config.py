@@ -20,3 +20,10 @@ TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 TTS_VOCODER_NAME = os.getenv("TTS_VOCODER_NAME", "vocos")
 TTS_SETTINGS_PATH = os.getenv("TTS_SETTINGS_PATH", "/app/voice_samples/.tts_settings.json")
 TTS_PORT = int(os.getenv("TTS_PORT", "8860"))
+
+TTS_ENGINE = os.getenv("TTS_ENGINE", "f5").lower()
+CHATTERBOX_TEMPERATURE = float(os.getenv("CHATTERBOX_TEMPERATURE", "0.8"))
+CHATTERBOX_TOP_P = float(os.getenv("CHATTERBOX_TOP_P", "0.95"))
+CHATTERBOX_TOP_K = int(os.getenv("CHATTERBOX_TOP_K", "1000"))
+CHATTERBOX_REPETITION_PENALTY = float(os.getenv("CHATTERBOX_REPETITION_PENALTY", "1.2"))
+CHATTERBOX_NORM_LOUDNESS = os.getenv("CHATTERBOX_NORM_LOUDNESS", "true").lower() == "true"
