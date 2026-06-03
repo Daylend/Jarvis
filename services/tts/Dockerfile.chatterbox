@@ -1,7 +1,4 @@
-ARG BASE_IMAGE=rocm/pytorch:latest
-FROM ${BASE_IMAGE}
-
-WORKDIR /app
+FROM rocm/pytorch:rocm6.4.1_ubuntu22.04_py3.10_pytorch_release_2.6.0
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models/hf
@@ -14,16 +11,29 @@ ENV OMP_NUM_THREADS=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg git ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
-# Upgraded to ROCm 6.3 + PyTorch 2.7.0 to natively support RDNA4 (gfx1201) and prevent GPU Hangs.
-RUN python -m pip install --upgrade pip wheel setuptools \
- && pip install --no-cache-dir torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
-      --index-url https://download.pytorch.org/whl/rocm6.3 \
- && pip install --no-cache-dir --no-deps chatterbox-tts==0.1.7 \
- && pip install --no-cache-dir \
-      "transformers==5.2.0" "diffusers==0.29.0" "librosa==0.11.0" s3tokenizer \
-      "safetensors==0.5.3" "conformer==0.3.2" pyloudnorm omegaconf \
-      "git+https://github.com/resemble-ai/Perth.git@master" \
-      fastapi "uvicorn[standard]" pydantic numpy
+# Install ROCm 6.4.1 torchaudio matching Chatterbox's declared pin.
+# The base image already provides ROCm 6.4.1 + PyTorch 2.6.0 + torchvision 0.21.0.
+RUN python3 -m pip install --upgrade pip wheel setuptools \
+ && python3 -m pip install --no-cache-dir --no-deps \
+      https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.1/torchaudio-2.6.0%2Brocm6.4.1.gitd8831425-cp310-cp310-linux_x86_64.whl
+
+# Install Chatterbox dependencies explicitly, then install Chatterbox itself without
+# letting pip replace the ROCm PyTorch stack with CPU or older ROCm wheels.
+RUN python3 -m pip install --no-cache-dir \
+      "numpy>=1.24.0,<2.0.0" \
+      librosa==0.11.0 \
+      s3tokenizer \
+      transformers==5.2.0 \
+      diffusers==0.29.0 \
+      "resemble-perth>=1.0.0" \
+      conformer==0.3.2 \
+      safetensors==0.5.3 \
+      spacy-pkuseg \
+      pykakasi==2.3.0 \
+      gradio==6.8.0 \
+      pyloudnorm \
+      omegaconf \
+ && python3 -m pip install --no-cache-dir --no-deps chatterbox-tts==0.1.7
 
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
@@ -34,4 +44,4 @@ EXPOSE 8860
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=600s \
     CMD curl -f http://localhost:8860/healthz || exit 1
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]

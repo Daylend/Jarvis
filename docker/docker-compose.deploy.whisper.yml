@@ -112,6 +112,8 @@ services:
       - SYS_PTRACE
     security_opt:
       - seccomp=unconfined
+    ipc: host
+    shm_size: 8g
     environment:
       - TTS_ENGINE=${TTS_ENGINE:-f5}
       - TTS_DEVICE=cuda:0
