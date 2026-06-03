@@ -1,9 +1,23 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, AutocompleteInteraction, EmbedBuilder } from 'discord.js';
+import axios from 'axios';
 import { config } from '../config';
 import { clearAllHistory } from '../voice/jarvis-handler';
 import { personalityStore } from '../voice/personality-store';
 import { llmProviderStore } from '../voice/llm-provider-store';
+import { sessionManager } from '../voice/session-manager';
+import { ttsClient } from '../voice/tts-client';
 import type { Command } from '../types';
+
+async function checkSidecarHealth(): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const res = await axios.get(`${config.transcribeHttpUrl}/healthz`, { timeout: 2000 });
+    const data = res.data as any;
+    const detail = `engine: ${data.engine ?? '?'}, model: ${data.model ?? '?'}, vulkan: ${data.vulkan ?? '?'}`;
+    return { ok: data.status === 'ok', detail };
+  } catch {
+    return { ok: false, detail: 'unreachable' };
+  }
+}
 
 export const jarvisCommand: Command = {
   data: new SlashCommandBuilder()
@@ -48,6 +62,24 @@ export const jarvisCommand: Command = {
         )
         .addSubcommand((s) =>
           s.setName('reload').setDescription('Reload all personality files from disk'),
+        ),
+    )
+    .addSubcommandGroup((g) =>
+      g.setName('listen').setDescription('Control voice transcription session')
+        .addSubcommand((sub) =>
+          sub
+            .setName('start')
+            .setDescription('Start listening in your current voice channel'),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('stop')
+            .setDescription('Stop the active listening session in this server'),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName('status')
+            .setDescription('Show current session status and sidecar health'),
         ),
     ),
 
@@ -199,6 +231,92 @@ export const jarvisCommand: Command = {
         } catch (err) {
           await interaction.editReply(`Failed to reload: ${(err as Error).message}`);
         }
+      }
+    }
+
+    if (group === 'listen') {
+      if (sub === 'start') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const member = await interaction.guild?.members.fetch(interaction.user.id);
+        const voiceChannel = member?.voice.channel;
+
+        if (!voiceChannel) {
+          await interaction.editReply('❌ You must be in a voice channel to start listening.');
+          return;
+        }
+
+        try {
+          const ctx = await sessionManager.start({
+            guild: interaction.guild!,
+            voiceChannel,
+            startedBy: interaction.user.id,
+          });
+          await interaction.editReply(
+            `✅ Listening started in **${voiceChannel.name}** (session \`${ctx.id}\`).`,
+          );
+        } catch (err) {
+          await interaction.editReply(`❌ Failed to start session: ${(err as Error).message}`);
+        }
+        return;
+      }
+
+      if (sub === 'stop') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ctx = sessionManager.get(interaction.guildId!);
+        if (!ctx) {
+          await interaction.editReply('ℹ️ No active listening session in this server.');
+          return;
+        }
+
+        await sessionManager.stop(interaction.guildId!, 'manual');
+        await interaction.editReply('🛑 Listening session stopped.');
+        return;
+      }
+
+      if (sub === 'status') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ctx = sessionManager.get(interaction.guildId!);
+        const health = await checkSidecarHealth();
+        const ttsHealth = await ttsClient.checkHealth();
+
+        const embed = new EmbedBuilder()
+          .setTitle('🎙️ Transcription Status')
+          .setColor(ctx ? 0x57f287 : 0xed4245)
+          .addFields(
+            {
+              name: 'Session',
+              value: ctx
+                ? `✅ Active — <#${ctx.channelId}>\nID: \`${ctx.id}\`\nStarted: <t:${Math.floor(ctx.startedAt.getTime() / 1000)}:R>`
+                : '❌ No active session',
+              inline: false,
+            },
+            {
+              name: 'ASR Sidecar',
+              value: health.ok ? `✅ Online — ${health.detail}` : `❌ Offline — ${health.detail}`,
+              inline: false,
+            },
+            {
+              name: 'TTS Sidecar',
+              value: ttsHealth.ok ? `✅ Online — ${ttsHealth.detail}` : `❌ Offline — ${ttsHealth.detail}`,
+              inline: false,
+            },
+            {
+              name: 'Auto-join owner',
+              value: config.autoJoinOwner ? '✅ Enabled' : '❌ Disabled',
+              inline: true,
+            },
+            {
+              name: 'Trigger phrase',
+              value: `\`${config.triggerPhrase}\``,
+              inline: true,
+            },
+          )
+          .setTimestamp();
+
+        await interaction.editReply({ embeds: [embed] });
       }
     }
   },

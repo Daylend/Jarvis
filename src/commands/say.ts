@@ -25,7 +25,7 @@ export const sayCommand: Command = {
 
     const ctx = sessionManager.get(interaction.guildId!);
     if (!ctx) {
-      await interaction.editReply('No active listening session in this server. Use `/listen start` first.');
+      await interaction.editReply('No active listening session in this server. Use `/jarvis listen start` first.');
       return;
     }
 

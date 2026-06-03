@@ -142,7 +142,7 @@ docker run --rm -v /path/to/asr-models:/app/models \
 
 ### New Slash Commands (all owner-only, ephemeral)
 
-#### `/listen`
+#### `/jarvis listen`
 | Subcommand | Description |
 |---|---|
 | `start` | Join your current voice channel and begin transcribing |
