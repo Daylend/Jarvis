@@ -13,6 +13,9 @@ services:
       - ASR_ENGINE=granite
       - ASR_OPENAI_BASE_URL=http://llama-cpp:8080/v1
       - ASR_GRANITE_MODEL=/models/granite-speech-4.1-2b-Q6_K.gguf
+      - ASR_GRANITE_PROMPT=transcribe the speech in English only with proper punctuation and capitalization. Do not translate. If non-English speech is present, transcribe only the English speech. The wake word is Jarvis.
+      - ASR_GRANITE_MAX_CONCURRENCY=4
+      - ASR_GRANITE_TIMEOUT_S=30
       - ASR_VAD_THRESHOLD=0.50
       - ASR_VAD_MIN_SILENCE_MS=500
       - ASR_VAD_SPEECH_PAD_MS=300

@@ -20,7 +20,7 @@ class Settings(BaseModel):
     granite_model: str = os.getenv("ASR_GRANITE_MODEL", "/models/granite-speech-4.1-2b-Q6_K.gguf")
     granite_prompt: str = os.getenv(
         "ASR_GRANITE_PROMPT",
-        "transcribe the speech with proper punctuation and capitalization.",
+        "transcribe the speech in English only with proper punctuation and capitalization. Do not translate. If non-English speech is present, transcribe only the English speech. The wake word is Jarvis.",
     )
     granite_max_concurrency: int = int(os.getenv("ASR_GRANITE_MAX_CONCURRENCY", "4"))
     granite_timeout_s: float = float(os.getenv("ASR_GRANITE_TIMEOUT_S", "30"))
