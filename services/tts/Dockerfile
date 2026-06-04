@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=rocm/pytorch:latest
+ARG BASE_IMAGE=rocm/pytorch:rocm6.4.2_ubuntu22.04_py3.10_pytorch_release_2.6.0
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
@@ -28,9 +28,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/tts/requirements.txt /app/requirements.txt
-RUN python -m pip install --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt \
-    && pip install --force-reinstall --no-cache-dir "torchcodec==0.10.*"
+
+# Prevent Pip from reinstalling/replacing the pre-built AMD PyTorch stack inside the base image.
+# We strip torch, torchaudio, torchvision, and torchcodec from the requirements, and then
+# install the compatible torchcodec 0.2.* built against PyTorch 2.6.
+RUN python -m pip install --upgrade pip wheel setuptools \
+    && grep -vE '^(torch|torchaudio|torchvision|torchcodec)([<>=~! ]|$)' /app/requirements.txt > /tmp/requirements.runtime.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.runtime.txt \
+    && pip install --no-cache-dir --no-deps \
+         --index-url https://download.pytorch.org/whl/cpu \
+         "torchcodec==0.2.*"
 
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
@@ -40,7 +47,7 @@ RUN mkdir -p /app/data /models/hf /models/torch \
 
 EXPOSE 8860
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=300s \
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=600s \
     CMD curl -f http://localhost:8860/healthz || exit 1
 
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]
