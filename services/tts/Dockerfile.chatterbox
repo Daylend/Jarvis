@@ -14,11 +14,14 @@ ENV OMP_NUM_THREADS=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg git ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
-# Install ROCm 6.4.2 pre-installed stack matching packages.
-# We explicitly avoid reinstalling/upgrading torch, torchaudio, or torchvision to protect
-# the AMD pre-built binaries. We install Chatterbox dependencies separately.
+COPY services/tts/constraints.txt /app/constraints.txt
+
+# The ROCm base image ships torch + torchvision but NOT torchaudio. Install the matching
+# ROCm torchaudio explicitly so s3tokenizer/conformer/chatterbox don't pull a CUDA build.
 RUN python3 -m pip install --upgrade pip wheel setuptools \
- && python3 -m pip install --no-cache-dir \
+ && python3 -m pip install --no-cache-dir --no-deps \
+      "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp310-cp310-linux_x86_64.whl" \
+ && python3 -m pip install --no-cache-dir -c /app/constraints.txt \
       "numpy>=1.24.0,<2.0.0" \
       librosa==0.11.0 \
       s3tokenizer \

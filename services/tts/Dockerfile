@@ -28,13 +28,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/tts/requirements.txt /app/requirements.txt
+COPY services/tts/constraints.txt /app/constraints.txt
 
-# Prevent Pip from reinstalling/replacing the pre-built AMD PyTorch stack inside the base image.
-# We strip torch, torchaudio, torchvision, and torchcodec from the requirements, and then
-# install the compatible torchcodec 0.2.* built against PyTorch 2.6.
+# The ROCm base image ships torch + torchvision but NOT torchaudio. Install the matching
+# ROCm torchaudio explicitly (the default PyPI torchaudio is a CUDA build → libcudart.so.13).
+# A constraints file keeps every transitive dep (f5-tts) from replacing the ROCm torch stack.
 RUN python -m pip install --upgrade pip wheel setuptools \
+    && pip install --no-cache-dir --no-deps \
+         "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp310-cp310-linux_x86_64.whl" \
     && grep -vE '^(torch|torchaudio|torchvision|torchcodec)([<>=~! ]|$)' /app/requirements.txt > /tmp/requirements.runtime.txt \
-    && pip install --no-cache-dir -r /tmp/requirements.runtime.txt \
+    && pip install --no-cache-dir -c /app/constraints.txt -r /tmp/requirements.runtime.txt \
     && pip install --no-cache-dir --no-deps \
          --index-url https://download.pytorch.org/whl/cpu \
          "torchcodec==0.2.*"
