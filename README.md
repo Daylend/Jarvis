@@ -124,6 +124,13 @@ AUTO_JOIN_OWNER=true
 VOICE_IDLE_TIMEOUT_SEC=900
 TRIGGER_PHRASE=jarvis
 JARVIS_CONTEXT_SECONDS=180
+
+# LLM Backend Configuration
+LLAMA_CPP_URL=http://llama-cpp:8080/v1
+LLAMA_CPP_MODEL=local                 # Model to use with llama.cpp. Set to specific model name when using llama.cpp router mode (default: local)
+JARVIS_LLM_BACKEND=local              # local | openrouter
+OPENROUTER_API_KEY=                   # Required for OpenRouter backend
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 ```
 
 **Sidecar env vars:**
@@ -176,6 +183,13 @@ The sidecar exposes `ws://asr:8765/ws/transcribe` and `http://asr:8765/healthz`.
 | `start` | Join your current voice channel and begin transcribing |
 | `stop` | Stop the active session in this server |
 | `status` | Show session info + ASR sidecar health |
+
+#### `/jarvis llm`
+| Subcommand | Options | Description |
+|---|---|---|
+| `show` | | Show the active LLM backend, selected model name, and backend readiness |
+| `models` | | List available local models on the llama.cpp router and their status (e.g., loaded, unloaded, sleeping) |
+| `set` | `backend` `[model]` | Switch backend (`local` or `openrouter`) and optionally set the model name (supports autocomplete for local models in router mode) |
 
 #### `/transcripts`
 | Subcommand | Options | Description |

@@ -34,6 +34,9 @@ export const jarvisCommand: Command = {
           s.setName('show').setDescription('Show the active LLM backend and model'),
         )
         .addSubcommand((s) =>
+          s.setName('models').setDescription('List available local models on the llama.cpp router'),
+        )
+        .addSubcommand((s) =>
           s.setName('set')
             .setDescription('Switch the LLM backend')
             .addStringOption((o) =>
@@ -41,7 +44,7 @@ export const jarvisCommand: Command = {
                 .addChoices({ name: 'local', value: 'local' }, { name: 'openrouter', value: 'openrouter' }),
             )
             .addStringOption((o) =>
-              o.setName('model').setDescription('OpenRouter model id (openrouter only)'),
+              o.setName('model').setDescription('Model name or ID (supports local autocomplete)').setAutocomplete(true),
             ),
         ),
     )
@@ -84,18 +87,46 @@ export const jarvisCommand: Command = {
     ),
 
   autocomplete: async (interaction: AutocompleteInteraction) => {
-    if (interaction.options.getSubcommandGroup(false) !== 'personality') {
+    if (interaction.user.id !== config.ownerId) {
       await interaction.respond([]);
       return;
     }
-    const focused = interaction.options.getFocused();
-    const all = personalityStore.list();
-    const filtered = all.filter((p) =>
-      `${p.name} ${p.id}`.toLowerCase().includes(focused.toLowerCase()),
-    );
-    await interaction.respond(
-      filtered.slice(0, 25).map((p) => ({ name: `${p.name} (${p.id})`, value: p.id })),
-    );
+
+    const group = interaction.options.getSubcommandGroup(false);
+    if (group === 'personality') {
+      const focused = interaction.options.getFocused();
+      const all = personalityStore.list();
+      const filtered = all.filter((p) =>
+        `${p.name} ${p.id}`.toLowerCase().includes(focused.toLowerCase()),
+      );
+      await interaction.respond(
+        filtered.slice(0, 25).map((p) => ({ name: `${p.name} (${p.id})`, value: p.id })),
+      );
+      return;
+    }
+
+    if (group === 'llm') {
+      const focused = interaction.options.getFocused();
+      const backend = interaction.options.getString('backend');
+      if (backend === 'openrouter') {
+        await interaction.respond([]);
+        return;
+      }
+      const models = await llmProviderStore.listModels();
+      if (!models) {
+        await interaction.respond([]);
+        return;
+      }
+      const filtered = models.filter((m) =>
+        m.id.toLowerCase().includes(focused.toLowerCase()),
+      );
+      await interaction.respond(
+        filtered.slice(0, 25).map((m) => ({ name: `${m.id} (${m.status})`, value: m.id })),
+      );
+      return;
+    }
+
+    await interaction.respond([]);
   },
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -120,6 +151,38 @@ export const jarvisCommand: Command = {
           content: `Backend: **${st.backend}**\nModel: ${st.model}\nReady: ${st.ready ? 'yes' : 'no (missing OPENROUTER_API_KEY)'}`,
           ephemeral: true,
         });
+        return;
+      }
+      if (sub === 'models') {
+        await interaction.deferReply({ ephemeral: true });
+        const models = await llmProviderStore.listModels();
+        if (!models) {
+          await interaction.editReply({
+            content: '❌ Llama.cpp router model list is unavailable. Ensure the llama.cpp server is running, reachable, and configured in router mode (without `-m` and with `--models-dir`).',
+          });
+          return;
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle('Llama.cpp Router Models')
+          .setColor(0x5865f2);
+
+        if (models.length === 0) {
+          embed.setDescription('No models found on the router.');
+        } else {
+          const currentLocalModel = llmProviderStore.getModel();
+          const activeBackend = llmProviderStore.getBackend();
+
+          const lines = models.map((m) => {
+            const isActive = activeBackend === 'local' && m.id === currentLocalModel;
+            return isActive
+              ? `▶ **${m.id}** — status: \`${m.status}\``
+              : `  ${m.id} — status: \`${m.status}\``;
+          });
+          embed.setDescription(lines.join('\n'));
+        }
+
+        await interaction.editReply({ embeds: [embed] });
         return;
       }
       if (sub === 'set') {

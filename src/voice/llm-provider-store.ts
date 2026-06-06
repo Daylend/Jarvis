@@ -1,22 +1,26 @@
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 import { config } from '../config';
 
 export type LlmBackend = 'local' | 'openrouter';
 
-interface LlmState { backend: LlmBackend; openrouterModel: string; }
+interface LlmState { backend: LlmBackend; openrouterModel: string; localModel?: string; }
 
 class LlmProviderStore {
   private backend: LlmBackend = 'local';
   private openrouterModel = '';
+  private localModel = '';
 
   init(): void {
     this.backend = config.jarvisLlmBackend;
     this.openrouterModel = config.openRouterModel;
+    this.localModel = config.llamaCppModel;
     const saved = this.readState();
     if (saved) {
       this.backend = saved.backend;
       if (saved.openrouterModel) this.openrouterModel = saved.openrouterModel;
+      if (saved.localModel) this.localModel = saved.localModel;
     }
     if (this.backend === 'openrouter' && !config.openRouterApiKey) {
       console.warn('[llm-provider] backend=openrouter but OPENROUTER_API_KEY empty — falling back to local');
@@ -26,7 +30,7 @@ class LlmProviderStore {
   }
 
   getBackend(): LlmBackend { return this.backend; }
-  getModel(): string { return this.backend === 'openrouter' ? this.openrouterModel : 'local'; }
+  getModel(): string { return this.backend === 'openrouter' ? this.openrouterModel : this.localModel; }
   getStatus(): { backend: LlmBackend; model: string; ready: boolean } {
     return { backend: this.backend, model: this.getModel(), ready: this.backend === 'local' || !!config.openRouterApiKey };
   }
@@ -35,6 +39,10 @@ class LlmProviderStore {
     if (backend === 'openrouter') {
       if (!config.openRouterApiKey) throw new Error('OPENROUTER_API_KEY is not set — cannot switch to OpenRouter.');
       this.openrouterModel = model?.trim() || this.openrouterModel || config.openRouterModel;
+    } else if (backend === 'local') {
+      if (model?.trim()) {
+        this.localModel = model.trim();
+      }
     }
     this.backend = backend;
     this.writeState();
@@ -77,7 +85,7 @@ class LlmProviderStore {
       headers: { 'Content-Type': 'application/json' },
       body: {
         ...base,
-        model: 'local',
+        model: this.localModel,
         min_p: 0.05,
         top_k: 64,
         repeat_penalty: 1.0,
@@ -93,6 +101,7 @@ class LlmProviderStore {
         return {
           backend: data.backend as LlmBackend,
           openrouterModel: typeof data.openrouterModel === 'string' ? data.openrouterModel : '',
+          localModel: typeof data.localModel === 'string' ? data.localModel : undefined,
         };
       }
     } catch {
@@ -107,10 +116,31 @@ class LlmProviderStore {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(
         config.jarvisLlmStatePath,
-        JSON.stringify({ backend: this.backend, openrouterModel: this.openrouterModel }),
+        JSON.stringify({
+          backend: this.backend,
+          openrouterModel: this.openrouterModel,
+          localModel: this.localModel,
+        }),
       );
     } catch (err) {
       console.error(`[llm-provider] failed to write state: ${(err as Error).message}`);
+    }
+  }
+
+  async listModels(): Promise<{ id: string; status: string }[] | null> {
+    try {
+      const baseUrl = config.llamaCppUrl.replace(/\/v1\/?$/, '');
+      const response = await axios.get(`${baseUrl}/models`, { timeout: 3000 });
+      if (response.data && Array.isArray(response.data.data)) {
+        return response.data.data.map((item: any) => ({
+          id: String(item.id || ''),
+          status: String(item.status?.value || 'unloaded'),
+        }));
+      }
+      return null;
+    } catch (err) {
+      console.warn(`[llm-provider] failed to list router models: ${(err as Error).message}`);
+      return null;
     }
   }
 }
