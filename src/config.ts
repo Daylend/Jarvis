@@ -134,6 +134,7 @@ const envSchema = z.object({
   // LLM
   LLAMA_CPP_URL: z.string().url().default('http://llama-cpp:8080/v1'),
   LLAMA_CPP_MODEL: z.string().default('local'),
+  LLM_THINKING: z.enum(['true', 'false']).default('false'),
   LLM_MAX_HISTORY: z.coerce.number().int().min(1).default(20),
   LLM_MAX_TOKENS: z.coerce.number().int().min(1).default(2048),
   LLM_CONTEXT_LENGTH: z.coerce.number().int().min(1).default(131072),
@@ -176,6 +177,7 @@ export const config = {
   // LLM
   llamaCppUrl: env.LLAMA_CPP_URL,
   llamaCppModel: env.LLAMA_CPP_MODEL,
+  llmThinking: env.LLM_THINKING === 'true',
   llmMaxHistory: env.LLM_MAX_HISTORY,
   llmMaxTokens: env.LLM_MAX_TOKENS,
   llmContextLength: env.LLM_CONTEXT_LENGTH,

@@ -5,22 +5,25 @@ import { config } from '../config';
 
 export type LlmBackend = 'local' | 'openrouter';
 
-interface LlmState { backend: LlmBackend; openrouterModel: string; localModel?: string; }
+interface LlmState { backend: LlmBackend; openrouterModel: string; localModel?: string; thinking?: boolean; }
 
 class LlmProviderStore {
   private backend: LlmBackend = 'local';
   private openrouterModel = '';
   private localModel = '';
+  private thinking = false;
 
   init(): void {
     this.backend = config.jarvisLlmBackend;
     this.openrouterModel = config.openRouterModel;
     this.localModel = config.llamaCppModel;
+    this.thinking = config.llmThinking;
     const saved = this.readState();
     if (saved) {
       this.backend = saved.backend;
       if (saved.openrouterModel) this.openrouterModel = saved.openrouterModel;
       if (saved.localModel) this.localModel = saved.localModel;
+      if (saved.thinking !== undefined) this.thinking = saved.thinking;
     }
     if (this.backend === 'openrouter' && !config.openRouterApiKey) {
       console.warn('[llm-provider] backend=openrouter but OPENROUTER_API_KEY empty — falling back to local');
@@ -31,8 +34,20 @@ class LlmProviderStore {
 
   getBackend(): LlmBackend { return this.backend; }
   getModel(): string { return this.backend === 'openrouter' ? this.openrouterModel : this.localModel; }
-  getStatus(): { backend: LlmBackend; model: string; ready: boolean } {
-    return { backend: this.backend, model: this.getModel(), ready: this.backend === 'local' || !!config.openRouterApiKey };
+  isThinkingEnabled(): boolean { return this.thinking; }
+  getStatus(): { backend: LlmBackend; model: string; ready: boolean; thinking: boolean } {
+    return {
+      backend: this.backend,
+      model: this.getModel(),
+      ready: this.backend === 'local' || !!config.openRouterApiKey,
+      thinking: this.thinking,
+    };
+  }
+
+  setThinking(enabled: boolean): void {
+    this.thinking = enabled;
+    this.writeState();
+    console.log(`[llm-provider] set thinking=${this.thinking}`);
   }
 
   setBackend(backend: LlmBackend, model?: string): void {
@@ -89,7 +104,7 @@ class LlmProviderStore {
         min_p: 0.05,
         top_k: 64,
         repeat_penalty: 1.0,
-        chat_template_kwargs: { enable_thinking: false },
+        chat_template_kwargs: { enable_thinking: this.thinking },
       },
     };
   }
@@ -102,6 +117,7 @@ class LlmProviderStore {
           backend: data.backend as LlmBackend,
           openrouterModel: typeof data.openrouterModel === 'string' ? data.openrouterModel : '',
           localModel: typeof data.localModel === 'string' ? data.localModel : undefined,
+          thinking: typeof data.thinking === 'boolean' ? data.thinking : undefined,
         };
       }
     } catch {
@@ -120,6 +136,7 @@ class LlmProviderStore {
           backend: this.backend,
           openrouterModel: this.openrouterModel,
           localModel: this.localModel,
+          thinking: this.thinking,
         }),
       );
     } catch (err) {

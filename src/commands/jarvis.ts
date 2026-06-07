@@ -37,6 +37,13 @@ export const jarvisCommand: Command = {
           s.setName('models').setDescription('List available local models on the llama.cpp router'),
         )
         .addSubcommand((s) =>
+          s.setName('thinking')
+            .setDescription('Toggle thinking mode (enable_thinking in chat_template_kwargs)')
+            .addBooleanOption((o) =>
+              o.setName('enabled').setDescription('Enable or disable thinking').setRequired(true),
+            ),
+        )
+        .addSubcommand((s) =>
           s.setName('set')
             .setDescription('Switch the LLM backend')
             .addStringOption((o) =>
@@ -148,7 +155,16 @@ export const jarvisCommand: Command = {
       if (sub === 'show') {
         const st = llmProviderStore.getStatus();
         await interaction.reply({
-          content: `Backend: **${st.backend}**\nModel: ${st.model}\nReady: ${st.ready ? 'yes' : 'no (missing OPENROUTER_API_KEY)'}`,
+          content: `Backend: **${st.backend}**\nModel: ${st.model}\nThinking: **${st.thinking ? 'enabled' : 'disabled'}**\nReady: ${st.ready ? 'yes' : 'no (missing OPENROUTER_API_KEY)'}`,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (sub === 'thinking') {
+        const enabled = interaction.options.getBoolean('enabled', true);
+        llmProviderStore.setThinking(enabled);
+        await interaction.reply({
+          content: `Thinking mode is now **${enabled ? 'enabled' : 'disabled'}** for local llama.cpp requests.`,
           ephemeral: true,
         });
         return;
