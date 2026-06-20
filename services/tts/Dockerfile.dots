@@ -41,6 +41,18 @@ ENV NUMEXPR_NUM_THREADS=1
 # Vendored dots_tts package lives at /app/vendor/dots_tts; expose via PYTHONPATH
 # instead of pip-installing (the vendored dir has no build metadata by design).
 ENV PYTHONPATH=/app/vendor
+# MIOpen solver selection for gfx1201 (RDNA 4 / R9700 AI Pro).
+# HYBRID checks existing DB entries first, otherwise performs a full search —
+# the default DYNAMIC_HYBRID mode can skip non-dynamic convolution candidates,
+# which on this stack biases the BigVGAN decoder convs toward the slow
+# GemmFwdRest (im2col + rocBLAS GEMM) path. The persistent paths survive
+# container restarts and retain both the selected solver database and the
+# JIT-compiled device kernels. Set MIOPEN_TUNE=1 only for a deliberate
+# warm-up/tuning run (see docker/entrypoint.dots.sh).
+ENV MIOPEN_FIND_MODE=HYBRID
+ENV MIOPEN_USER_DB_PATH=/models/miopen/userdb
+ENV MIOPEN_CUSTOM_CACHE_DIR=/models/miopen/kernel-cache
+ENV MIOPEN_TUNE=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg git ca-certificates curl python3-pip python-is-python3 \
@@ -89,8 +101,16 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
 
-RUN mkdir -p /app/data /models/hf /models/torch \
+RUN mkdir -p \
+        /app/data \
+        /models/hf \
+        /models/torch \
+        /models/miopen/userdb \
+        /models/miopen/kernel-cache \
     && chmod -R 777 /app/data /models
+
+COPY services/tts/docker/entrypoint.dots.sh /app/entrypoint.dots.sh
+RUN chmod 0755 /app/entrypoint.dots.sh
 
 EXPOSE 8860
 
@@ -100,4 +120,5 @@ EXPOSE 8860
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=900s \
     CMD curl -f http://localhost:8860/healthz || exit 1
 
+ENTRYPOINT ["/app/entrypoint.dots.sh"]
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]
