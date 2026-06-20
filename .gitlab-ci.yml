@@ -239,3 +239,43 @@ build-tts-dots:
       when: on_success
   tags:
     - docker
+
+# ── Maintenance: clear BuildKit cache ────────────────────────────────────────
+# Manual job to reclaim disk space from accumulated BuildKit layer caches.
+# The TTS/ASR images are large (multi-GB ROCm + torch stacks); repeated failed
+# or partial builds fill /cache. Trigger from the pipeline UI when the runner
+# reports "No space left on device".
+#
+# Scope is controlled by the CLEAR_CACHE_SCOPE variable (set it in the pipeline
+# "Run pipeline" UI, or trigger this job with variables):
+#   - "all" (default): wipe every per-image cache + buildkit root/tmp working dirs.
+#   - a single image cache dir name, e.g. "paxfax-tts-dots" or "paxfax-tts":
+#       only that image's cache is cleared; other warm caches are preserved.
+# The next build of the cleared target repopulates its cache from scratch (no
+# warm cache, so expect a slower first build afterwards).
+clear-build-cache:
+  stage: build
+  image: alpine:latest
+  variables:
+    GIT_STRATEGY: none
+    CLEAR_CACHE_SCOPE: "all"
+  script:
+    - echo "Clearing BuildKit caches (scope=${CLEAR_CACHE_SCOPE}) ..."
+    - du -sh /cache/* 2>/dev/null || true
+    - |
+      if [ "$CLEAR_CACHE_SCOPE" = "all" ]; then
+        rm -rf ${BUILDKIT_CACHE_DIR}/* /cache/buildkit-root /cache/buildkit-tmp
+      elif [ -n "$CLEAR_CACHE_SCOPE" ] && [ -d "${BUILDKIT_CACHE_DIR}/${CLEAR_CACHE_SCOPE}" ]; then
+        rm -rf "${BUILDKIT_CACHE_DIR}/${CLEAR_CACHE_SCOPE}"
+        echo "Cleared only ${BUILDKIT_CACHE_DIR}/${CLEAR_CACHE_SCOPE}"
+      else
+        echo "Scope '${CLEAR_CACHE_SCOPE}' is not 'all' and no matching cache dir found; nothing cleared."
+        exit 1
+      fi
+    - echo "Cleared. Remaining /cache contents:"
+    - du -sh /cache/* 2>/dev/null || true
+  rules:
+    - when: manual
+  allow_failure: true
+  tags:
+    - docker
