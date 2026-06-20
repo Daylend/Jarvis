@@ -1,21 +1,19 @@
-# dots.tts engine sidecar.
+# dots.tts engine sidecar — built for AMD gfx1201 (Radeon R9700 AI Pro).
 #
-# Key difference from Dockerfile / Dockerfile.chatterbox: dots.tts requires
-# torch>=2.8.0, but repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2 tops out at
-# torch 2.6.0. The ROCm 2.8 wheels ship on the pytorch.org rocm6.4 index instead:
-#   https://download.pytorch.org/whl/rocm6.4/
-# (torch 2.8.0, torchaudio 2.8.0, torchvision 0.23.0, cp310 — verified available).
+# Why this base and not rocm/pytorch (like the F5/Chatterbox Dockerfiles):
+# gfx1201 needs ROCm 7.x. The rocm/pytorch bases max out at torch 2.9.1 on
+# ROCm 7.2, but the pytorch.org rocm7.2 wheel index ships torchaudio ONLY at
+# 2.11.0 (which requires torch 2.11.0) — so there is no torch/torchaudio matched
+# pair that can be overlaid onto a 2.9.1 conda base. The clean path is the same
+# bare ROCm dev base the llama.cpp sidecar uses (rocm/dev-ubuntu-24.04:7.2.1-complete,
+# proven working on this GPU) with a fresh matched pip pair from the rocm7.2 index:
+#   torch 2.11.0+rocm7.2 + torchaudio 2.11.0+rocm7.2 (+ triton-rocm 3.6.0)
+# Installing both from one index with no conda torch underneath avoids the
+# libtorch_hip.so "cannot open shared object file" failure that occurs when
+# pip torch is overlaid on a mismatched conda torch.
 #
-# The dots_tts package is vendored under services/tts/vendor/dots_tts (copied
-# from the upstream src/dots_tts). We install it with --no-deps and curate the
-# transitive deps by hand to (a) avoid the gradio hard-dep that dots_tts' own
-# pyproject would drag in (the sidecar never imports gradio) and (b) prevent the
-# resolver from pulling a CUDA torch build over the ROCm stack.
-#
-# WeTextProcessing (the `tn` package) is NOT optional here: dots_tts.utils.text
-# imports tn.* at module top level, and runtime.py imports utils.text at load —
-# so tn + onnxruntime must be installed regardless of DOTS_NORMALIZE_TEXT.
-ARG BASE_IMAGE=rocm/pytorch:rocm6.4.2_ubuntu22.04_py3.10_pytorch_release_2.6.0
+# dots.tts declares torch>=2.8.0 / torchaudio>=2.8.0, so 2.11.0 satisfies it.
+ARG BASE_IMAGE=rocm/dev-ubuntu-24.04:7.2.1-complete
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
@@ -23,6 +21,9 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models/hf
 ENV TORCH_HOME=/models/torch
+# torch/lib .so files link the ROCm runtime libs (libMIOpen, libhipblas, ...);
+# the dev base does not set LD_LIBRARY_PATH, so point it at /opt/rocm/lib.
+ENV LD_LIBRARY_PATH=/opt/rocm/lib
 ENV TTS_DEVICE=cuda:0
 ENV TTS_PORT=8860
 ENV TTS_ENGINE=dots
@@ -42,48 +43,48 @@ ENV NUMEXPR_NUM_THREADS=1
 ENV PYTHONPATH=/app/vendor
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg git ca-certificates curl \
-    libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev \
+    ffmpeg git ca-certificates curl python3-pip python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY services/tts/constraints.dots.txt /app/constraints.dots.txt
-
 # Vendor the dots_tts package source (copied from upstream src/dots_tts).
 COPY services/tts/vendor/dots_tts /app/vendor/dots_tts
 
-# 1) Upgrade the base image's torch 2.6.0 ROCm stack to 2.8.0 from the pytorch.org
-#    rocm6.4 index. Install with --no-deps so pip doesn't try to resolve a CUDA
-#    fallback, then let the constraints file pin the rest.
-# 2) Install the curated transitive dep set for the vendored dots_tts package.
-#    WeTextProcessing (tn) is mandatory: dots_tts.utils.text imports it at module
-#    top level, pulled in unconditionally at runtime load.
+# 1) torch 2.11.0 + torchaudio 2.11.0 from the rocm7.2 index. No --no-deps:
+#    this also pulls torch's own deps (triton-rocm==3.6.0, typing_extensions,
+#    sympy, networkx, jinja2, fsspec, filelock) which only exist on this index.
+# 2) dots.tts transitive deps from PyPI + rocm7.2 as extra-index. The
+#    constraints file freezes torch/torchaudio so pip can't "upgrade" torch to a
+#    CUDA build from PyPI (which would silently replace the ROCm stack).
+#    WeTextProcessing (tn) is mandatory: dots_tts.utils.text imports it at
+#    module top level, pulled in unconditionally at runtime load.
+#    torchcodec/torchvision are NOT imported by dots.tts and are omitted.
 # 3) fastapi sidecar deps (not part of dots_tts).
 #    The dots_tts package itself is NOT pip-installed — it is vendored under
-#    /app/vendor/dots_tts and exposed via PYTHONPATH (see ENV above), avoiding its
-#    pyproject's gradio hard-dep and torch>=2.8 resolver fight.
-RUN python -m pip install --upgrade pip wheel setuptools \
-    && pip install --no-cache-dir --no-deps --index-url https://download.pytorch.org/whl/rocm6.4 \
-         torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 \
-    && pip install --no-cache-dir --no-deps \
-         --index-url https://download.pytorch.org/whl/cpu \
-         "torchcodec==0.2.*" \
-    && pip install --no-cache-dir -c /app/constraints.dots.txt \
-         einops \
-         huggingface-hub \
-         "langcodes[data]" \
-         "librosa==0.11.0" \
-         lingua-language-detector \
-         loguru \
-         "numpy==2.2.6" \
-         "pydantic==2.12.5" \
-         "PyYAML==6.0.3" \
-         "safetensors==0.8.0rc0" \
-         "soundfile==0.13.1" \
-         "transformers==4.57.0" \
-         torchdiffeq \
-         WeTextProcessing \
-         fastapi \
-         "uvicorn[standard]"
+#    /app/vendor/dots_tts and exposed via PYTHONPATH (see ENV above), avoiding
+#    its pyproject's gradio hard-dep and torch>=2.8 resolver fight.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        --index-url https://download.pytorch.org/whl/rocm7.2 \
+        torch==2.11.0 torchaudio==2.11.0 \
+    && pip3 install --no-cache-dir --break-system-packages \
+        --extra-index-url https://download.pytorch.org/whl/rocm7.2 \
+        -c /app/constraints.dots.txt \
+        einops \
+        huggingface-hub \
+        "langcodes[data]" \
+        "librosa==0.11.0" \
+        lingua-language-detector \
+        loguru \
+        "numpy==2.2.6" \
+        "pydantic==2.12.5" \
+        "PyYAML==6.0.3" \
+        "safetensors==0.8.0rc0" \
+        "soundfile==0.13.1" \
+        "transformers==4.57.0" \
+        torchdiffeq \
+        WeTextProcessing \
+        fastapi \
+        "uvicorn[standard]"
 
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app

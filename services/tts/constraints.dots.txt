@@ -1,12 +1,13 @@
 # Constraints for the dots.tts engine build.
 #
-# dots.tts declares torch>=2.8.0, which conflicts with the base constraints.txt
-# (pinned to the ROCm 2.6.0 stack). The ROCm 2.8 wheels ship on the pytorch.org
-# rocm6.4 index (NOT repo.radeon.com, which tops out at 2.6.0) — see Dockerfile.dots.
-# These pins keep dots.tts' transitive deps from replacing the ROCm torch stack.
-torch==2.8.0
-torchaudio==2.8.0
-torchvision==0.23.0
+# gfx1201 (Radeon R9700 AI Pro) needs ROCm 7.x, and the only torch/torchaudio
+# matched pair on the pytorch.org rocm7.2 index is 2.11.0 — see Dockerfile.dots.
+# These pins freeze the torch stack so that when the dots.tts transitive deps are
+# installed from PyPI (+ rocm7.2 extra-index), pip cannot "upgrade" torch to a
+# CUDA build from PyPI and silently replace the ROCm runtime. The local-version
+# segment (+rocm7.2) is required for pip's == to match the installed wheel.
+torch==2.11.0+rocm7.2
+torchaudio==2.11.0+rocm7.2
 
 # Match dots.tts' recommended.txt for the heavier scientific deps.
 numpy==2.2.6
