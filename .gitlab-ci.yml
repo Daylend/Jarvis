@@ -33,6 +33,11 @@ variables:
   TTS_CHATTERBOX_IMAGE: $DOCKER_REGISTRY/$TTS_CHATTERBOX_IMAGE_NAME:$CI_COMMIT_SHA
   TTS_CHATTERBOX_LATEST_IMAGE: $DOCKER_REGISTRY/$TTS_CHATTERBOX_IMAGE_NAME:latest
 
+  # TTS dots.tts sidecar image
+  TTS_DOTS_IMAGE_NAME: paxfax-tts-dots
+  TTS_DOTS_IMAGE: $DOCKER_REGISTRY/$TTS_DOTS_IMAGE_NAME:$CI_COMMIT_SHA
+  TTS_DOTS_LATEST_IMAGE: $DOCKER_REGISTRY/$TTS_DOTS_IMAGE_NAME:latest
+
   # Rootless BuildKit configuration
   BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
   BUILDKIT_CACHE_DIR: /cache/buildkit
@@ -194,6 +199,38 @@ build-tts-chatterbox:
         --output type=image,\"name=$TTS_CHATTERBOX_IMAGE,$TTS_CHATTERBOX_LATEST_IMAGE\",push=true
     - echo "Successfully pushed $TTS_CHATTERBOX_IMAGE"
     - echo "Also tagged and pushed as $TTS_CHATTERBOX_LATEST_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - services/tts/**/*
+        - .gitlab-ci.yml
+      when: on_success
+  tags:
+    - docker
+
+# ── TTS dots.tts Sidecar ─────────────────────────────────────────────────────
+build-tts-dots:
+  stage: build
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox --root /cache/buildkit-root
+    TMPDIR: /cache/buildkit-tmp
+  before_script: *buildkit-auth
+  script:
+    - echo "Building and pushing TTS dots.tts Docker image..."
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=services/tts \
+        --opt filename=Dockerfile.dots \
+        --import-cache type=local,src="$BUILDKIT_CACHE_DIR/paxfax-tts-dots" \
+        --export-cache type=local,dest="$BUILDKIT_CACHE_DIR/paxfax-tts-dots",mode=min \
+        --output type=image,\"name=$TTS_DOTS_IMAGE,$TTS_DOTS_LATEST_IMAGE\",push=true
+    - echo "Successfully pushed $TTS_DOTS_IMAGE"
+    - echo "Also tagged and pushed as $TTS_DOTS_LATEST_IMAGE"
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:

@@ -1,0 +1,102 @@
+# dots.tts engine sidecar.
+#
+# Key difference from Dockerfile / Dockerfile.chatterbox: dots.tts requires
+# torch>=2.8.0, but repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2 tops out at
+# torch 2.6.0. The ROCm 2.8 wheels ship on the pytorch.org rocm6.4 index instead:
+#   https://download.pytorch.org/whl/rocm6.4/
+# (torch 2.8.0, torchaudio 2.8.0, torchvision 0.23.0, cp310 — verified available).
+#
+# The dots_tts package is vendored under services/tts/vendor/dots_tts (copied
+# from the upstream src/dots_tts). We install it with --no-deps and curate the
+# transitive deps by hand to (a) avoid the gradio hard-dep that dots_tts' own
+# pyproject would drag in (the sidecar never imports gradio) and (b) prevent the
+# resolver from pulling a CUDA torch build over the ROCm stack.
+#
+# WeTextProcessing (the `tn` package) is NOT optional here: dots_tts.utils.text
+# imports tn.* at module top level, and runtime.py imports utils.text at load —
+# so tn + onnxruntime must be installed regardless of DOTS_NORMALIZE_TEXT.
+ARG BASE_IMAGE=rocm/pytorch:rocm6.4.2_ubuntu22.04_py3.10_pytorch_release_2.6.0
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/models/hf
+ENV TORCH_HOME=/models/torch
+ENV TTS_DEVICE=cuda:0
+ENV TTS_PORT=8860
+ENV TTS_ENGINE=dots
+ENV TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+# dots.tts defaults — see services/tts/app/config.py for the full set + docs.
+ENV DOTS_MODEL=rednote-hilab/dots.tts-mf
+ENV DOTS_NUM_STEPS=4
+ENV DOTS_GUIDANCE_SCALE=1.2
+ENV DOTS_OPTIMIZE=true
+ENV DOTS_NORMALIZE_TEXT=false
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+# Vendored dots_tts package lives at /app/vendor/dots_tts; expose via PYTHONPATH
+# instead of pip-installing (the vendored dir has no build metadata by design).
+ENV PYTHONPATH=/app/vendor
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg git ca-certificates curl \
+    libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libavfilter-dev libswscale-dev libswresample-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY services/tts/constraints.dots.txt /app/constraints.dots.txt
+
+# Vendor the dots_tts package source (copied from upstream src/dots_tts).
+COPY services/tts/vendor/dots_tts /app/vendor/dots_tts
+
+# 1) Upgrade the base image's torch 2.6.0 ROCm stack to 2.8.0 from the pytorch.org
+#    rocm6.4 index. Install with --no-deps so pip doesn't try to resolve a CUDA
+#    fallback, then let the constraints file pin the rest.
+# 2) Install the curated transitive dep set for the vendored dots_tts package.
+#    WeTextProcessing (tn) is mandatory: dots_tts.utils.text imports it at module
+#    top level, pulled in unconditionally at runtime load.
+# 3) fastapi sidecar deps (not part of dots_tts).
+#    The dots_tts package itself is NOT pip-installed — it is vendored under
+#    /app/vendor/dots_tts and exposed via PYTHONPATH (see ENV above), avoiding its
+#    pyproject's gradio hard-dep and torch>=2.8 resolver fight.
+RUN python -m pip install --upgrade pip wheel setuptools \
+    && pip install --no-cache-dir --no-deps --index-url https://download.pytorch.org/whl/rocm6.4 \
+         torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 \
+    && pip install --no-cache-dir --no-deps \
+         --index-url https://download.pytorch.org/whl/cpu \
+         "torchcodec==0.2.*" \
+    && pip install --no-cache-dir -c /app/constraints.dots.txt \
+         einops \
+         huggingface-hub \
+         "langcodes[data]" \
+         "librosa==0.11.0" \
+         lingua-language-detector \
+         loguru \
+         "numpy==2.2.6" \
+         "pydantic==2.12.5" \
+         "PyYAML==6.0.3" \
+         "safetensors==0.8.0rc0" \
+         "soundfile==0.13.1" \
+         "transformers==4.57.0" \
+         torchdiffeq \
+         WeTextProcessing \
+         fastapi \
+         "uvicorn[standard]"
+
+COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
+COPY services/tts/app /app/app
+
+RUN mkdir -p /app/data /models/hf /models/torch \
+    && chmod -R 777 /app/data /models
+
+EXPOSE 8860
+
+# dots.tts checkpoints are ~2B params (~5GB bf16 + VAE). The first-run HF
+# snapshot_download is much larger than F5/Chatterbox; keep a generous start
+# period (or pre-download the model in-image via huggingface-cli for a deploy).
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=900s \
+    CMD curl -f http://localhost:8860/healthz || exit 1
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]

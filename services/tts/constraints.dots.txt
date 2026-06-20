@@ -1,0 +1,18 @@
+# Constraints for the dots.tts engine build.
+#
+# dots.tts declares torch>=2.8.0, which conflicts with the base constraints.txt
+# (pinned to the ROCm 2.6.0 stack). The ROCm 2.8 wheels ship on the pytorch.org
+# rocm6.4 index (NOT repo.radeon.com, which tops out at 2.6.0) — see Dockerfile.dots.
+# These pins keep dots.tts' transitive deps from replacing the ROCm torch stack.
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
+
+# Match dots.tts' recommended.txt for the heavier scientific deps.
+numpy==2.2.6
+transformers==4.57.0
+safetensors==0.8.0rc0
+librosa==0.11.0
+soundfile==0.13.1
+pydantic==2.12.5
+PyYAML==6.0.3

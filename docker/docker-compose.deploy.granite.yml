@@ -87,8 +87,10 @@ services:
 
   tts:
     # To use Chatterbox Turbo, switch image tag below and set TTS_ENGINE=chatterbox
+    # To use dots.tts, switch image tag to paxfax-tts-dots:latest and set TTS_ENGINE=dots
     image: registry.example.com/paxfax-tts:latest
     # image: registry.example.com/paxfax-tts-chatterbox:latest
+    # image: registry.example.com/paxfax-tts-dots:latest
     container_name: paxfax-tts
     restart: unless-stopped
     devices:
@@ -105,20 +107,26 @@ services:
     environment:
       - TTS_ENGINE=${TTS_ENGINE:-f5}
       - TTS_DEVICE=cuda:0
-      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav # Switch to ultron.mp3 if using Chatterbox
+      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav # Chatterbox needs mp3; F5/dots.tts accept wav or mp3
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
-      # F5-TTS specific config (ignored if TTS_ENGINE=chatterbox)
+      # F5-TTS specific config (ignored if TTS_ENGINE != f5)
       - TTS_VOCODER_NAME=vocos
       - TTS_CFG_STEPS=${TTS_CFG_STEPS:-12}
       - TTS_CFG_STRENGTH=${TTS_CFG_STRENGTH:-2.0}
       - TTS_TORCH_COMPILE=${TTS_TORCH_COMPILE:-true}
-      # Chatterbox Turbo specific config (ignored if TTS_ENGINE=f5)
+      # Chatterbox Turbo specific config (ignored if TTS_ENGINE != chatterbox)
       - CHATTERBOX_TEMPERATURE=${CHATTERBOX_TEMPERATURE:-0.8}
       - CHATTERBOX_TOP_P=${CHATTERBOX_TOP_P:-0.95}
       - CHATTERBOX_TOP_K=${CHATTERBOX_TOP_K:-1000}
       - CHATTERBOX_REPETITION_PENALTY=${CHATTERBOX_REPETITION_PENALTY:-1.2}
       - CHATTERBOX_NORM_LOUDNESS=${CHATTERBOX_NORM_LOUDNESS:-true}
+      # dots.tts specific config (ignored if TTS_ENGINE != dots)
+      - DOTS_MODEL=${DOTS_MODEL:-rednote-hilab/dots.tts-mf}
+      - DOTS_NUM_STEPS=${DOTS_NUM_STEPS:-4}
+      - DOTS_GUIDANCE_SCALE=${DOTS_GUIDANCE_SCALE:-1.2}
+      - DOTS_OPTIMIZE=${DOTS_OPTIMIZE:-true}
+      - DOTS_NORMALIZE_TEXT=${DOTS_NORMALIZE_TEXT:-false}
     volumes:
       - /srv/docker/appdata/paxfax/voice_samples:/app/voice_samples
       - /srv/docker/appdata/paxfax/tts-models:/models
@@ -127,6 +135,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      # dots.tts pulls ~5GB on first boot (vs F5/Chatterbox's smaller cache);
+      # 600s may be tight for dots — bump to 900s if TTS_ENGINE=dots.
       start_period: 600s
     logging:
       driver: "json-file"

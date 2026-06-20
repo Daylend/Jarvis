@@ -27,3 +27,31 @@ CHATTERBOX_TOP_P = float(os.getenv("CHATTERBOX_TOP_P", "0.95"))
 CHATTERBOX_TOP_K = int(os.getenv("CHATTERBOX_TOP_K", "1000"))
 CHATTERBOX_REPETITION_PENALTY = float(os.getenv("CHATTERBOX_REPETITION_PENALTY", "1.2"))
 CHATTERBOX_NORM_LOUDNESS = os.getenv("CHATTERBOX_NORM_LOUDNESS", "true").lower() == "true"
+
+# dots.tts engine — see model_dots.py. The MeanFlow-distilled checkpoint (mf, NFE=4)
+# is the speed-optimized variant and the right default for real-time voice chat.
+# Swap to rednote-hilab/dots.tts-soar (best SIM, num_steps 10-32) or
+# rednote-hilab/dots.tts-base (vanilla pretrained) by changing DOTS_MODEL alone.
+DOTS_MODEL = os.getenv("DOTS_MODEL", "rednote-hilab/dots.tts-mf")
+# Flow-matching sampling steps. mf is trained for 4; soar/base use 10 (range 10-32).
+DOTS_NUM_STEPS = int(os.getenv("DOTS_NUM_STEPS", "4"))
+# CFG scale. mf fuses CFG into the student so this is largely a no-op there;
+# meaningful for soar/base (paper default 1.2).
+DOTS_GUIDANCE_SCALE = float(os.getenv("DOTS_GUIDANCE_SCALE", "1.2"))
+DOTS_SPEAKER_SCALE = float(os.getenv("DOTS_SPEAKER_SCALE", "1.5"))
+DOTS_PRECISION = os.getenv("DOTS_PRECISION", "bfloat16")
+# torch.compile warmup at load (analog of F5 TTS_TORCH_COMPILE). If ROCm compile
+# of the dots graph (LLM + DiT + VAE) is unstable, set false and rely on NFE=4.
+DOTS_OPTIMIZE = os.getenv("DOTS_OPTIMIZE", "true").lower() == "true"
+# Max total audio patch count (prompt + generated). Very long replies may exceed
+# this and raise ValueError; the sidecar chunks text to stay under it.
+DOTS_MAX_GENERATE_LENGTH = int(os.getenv("DOTS_MAX_GENERATE_LENGTH", "500"))
+# WeTextProcessing text normalization. Requires onnxruntime (installed in image).
+DOTS_NORMALIZE_TEXT = os.getenv("DOTS_NORMALIZE_TEXT", "false").lower() == "true"
+# Language tag: none | auto_detect | code/name (EN, ZH, english, chinese, ...).
+DOTS_LANGUAGE = os.getenv("DOTS_LANGUAGE", "none")
+# Reproducible clones per voice. seed_everything is called once at load.
+DOTS_SEED = int(os.getenv("DOTS_SEED", "42"))
+# Soft cap on characters per generate() call; longer text is split server-side
+# to respect DOTS_MAX_GENERATE_LENGTH and bound VRAM/latency per chunk.
+DOTS_MAX_CHARS_PER_CALL = int(os.getenv("DOTS_MAX_CHARS_PER_CALL", "400"))

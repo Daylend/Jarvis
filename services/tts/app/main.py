@@ -10,6 +10,8 @@ from app.config import TTS_PORT
 _TTS_ENGINE = os.getenv("TTS_ENGINE", "f5").lower()
 if _TTS_ENGINE == "chatterbox":
     from app import model_chatterbox as tts_model
+elif _TTS_ENGINE == "dots":
+    from app import model_dots as tts_model
 else:
     from app import model as tts_model
 
@@ -19,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PaxFax F5-TTS Sidecar")
+app = FastAPI(title="PaxFax TTS Sidecar")
 
 
 class TtsRequest(BaseModel):
@@ -42,7 +44,7 @@ class SpeedRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup():
-    logger.info("Pre-loading F5-TTS model...")
+    logger.info("Pre-loading TTS model (engine=%s)...", _TTS_ENGINE)
     try:
         tts_model._ensure_loaded()
         info = tts_model.get_engine_info()
@@ -54,7 +56,7 @@ async def startup():
         )
     except Exception:
         logger.exception(
-            "Failed to pre-load F5-TTS model — will retry on first request"
+            "Failed to pre-load TTS model — will retry on first request"
         )
         return
 

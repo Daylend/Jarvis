@@ -83,7 +83,7 @@ def set_speed(value: float) -> float:
 
 
 def set_ref_audio(path: str):
-    global CURRENT_VOICE, _CURRENT_REF_PATH
+    global CURRENT_VOICE, _CURRENT_REF_PATH, REF_TEXT
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Voice sample not found: {path}")
 
@@ -92,6 +92,20 @@ def set_ref_audio(path: str):
     MODEL.prepare_conditionals(path, norm_loudness=CHATTERBOX_NORM_LOUDNESS)
     _CURRENT_REF_PATH = path
     CURRENT_VOICE = os.path.basename(path)
+
+    # Read the sibling <name>.txt transcript (if present) so the /voice endpoint
+    # can echo it consistently across engines. Chatterbox itself doesn't need it
+    # (it clones from audio alone), so a missing file is non-fatal here.
+    tx_path = os.path.splitext(path)[0] + ".txt"
+    if os.path.isfile(tx_path):
+        try:
+            with open(tx_path, "r", encoding="utf-8") as f:
+                REF_TEXT = f.read().strip() or None
+        except Exception:
+            REF_TEXT = None
+    else:
+        REF_TEXT = None
+
     logger.info("Switched Chatterbox reference voice to %s", CURRENT_VOICE)
     _save_settings()
 
