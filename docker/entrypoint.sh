@@ -40,12 +40,14 @@ fi
 echo "Logs will be written to $(ls -la /app/logs)"
 
 # Ensure sounds directory exists and seed it from the image-baked defaults
-# if the mount is empty (fresh host folder). The seed is copied (not moved)
-# so existing user sounds are preserved on subsequent starts.
+# if the mount is empty (fresh host folder). The guard checks for the default
+# seed file, so we only copy once; user-added sounds are preserved.
+# NOTE: do not use `cp -n` — BusyBox cp silently no-ops with the `/.` source
+# form, leaving the folder empty. Plain `cp -r` is reliable on Alpine.
 mkdir -p /app/sounds
 if [ ! -f "/app/sounds/06_web_fan_195hz.wav" ] && [ -d "/app/sounds-seed" ]; then
   echo "Seeding /app/sounds from /app/sounds-seed"
-  cp -rn /app/sounds-seed/. /app/sounds/ 2>/dev/null || cp -r /app/sounds-seed/. /app/sounds/
+  cp -r /app/sounds-seed/. /app/sounds/
 fi
 if [ -n "$PUID" ] && [ -n "$PGID" ]; then
   chown -R node:node /app/sounds 2>/dev/null || true
