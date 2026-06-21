@@ -40,12 +40,19 @@ ENV OMP_NUM_THREADS=2
 ENV MKL_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1
 ENV NUMEXPR_NUM_THREADS=1
-# MIOpen solver selection for gfx1201 (RDNA 4 / R9700 AI Pro). The conformer / s3gen
-# convs hit the same slow GemmFwdRest path as dots.tts' BigVGAN decoder under the
-# default DYNAMIC_HYBRID mode, so pin HYBRID and persist the solver DB + JIT kernels
-# under the /models volume (tts-models:/models). Set MIOPEN_TUNE=1 only for a
-# deliberate warm-up/tuning run (see docker/entrypoint.chatterbox.sh).
-ENV MIOPEN_FIND_MODE=HYBRID
+# MIOpen solver selection for gfx1201 (RDNA 4 / R9700 AI Pro).
+# IMPORTANT: do NOT force MIOPEN_FIND_MODE=HYBRID at runtime. ATen's legacy
+# MIOpen Find API passes zero workspace (pytorch #178839), so workspace-requiring
+# GEMM conv candidates (the s3gen/conformer GemmFwdRest path) are rejected during
+# selection anyway — forcing HYBRID just adds Find overhead on every miss without
+# ever picking those solvers. AMD's guidance is to tune once, then run on the
+# default DYNAMIC_HYBRID mode, which consults the persisted Find DB first and
+# falls back to immediate mode. The DB + JIT kernel cache persist under the
+# /models volume (tts-models:/models) across restarts.
+# entrypoint.chatterbox.sh sets MIOPEN_FIND_MODE=HYBRID + FIND_ENFORCE=SEARCH only
+# when MIOPEN_TUNE=1 (deliberate warm-up pass). For ad-hoc experimentation you can
+# also override MIOPEN_FIND_MODE (e.g. FAST, DYNAMIC_HYBRID) via compose env with
+# no rebuild.
 ENV MIOPEN_USER_DB_PATH=/models/miopen/userdb
 ENV MIOPEN_CUSTOM_CACHE_DIR=/models/miopen/kernel-cache
 ENV MIOPEN_TUNE=0

@@ -126,6 +126,19 @@ def _ensure_loaded():
     SAMPLE_RATE = MODEL.sr
     SPEED = TTS_SPEED
 
+    # Chatterbox inits the PerTh watermarker on CPU (perth defaults to
+    # device="cpu" and generate() moves wav to .cpu().numpy() before calling
+    # apply_watermark). Re-init it on the inference device so the PerthNet
+    # encoder/decoder convs run on GPU. apply_watermark moves the input to
+    # self.perth_net.device internally, so the numpy call path is unchanged —
+    # only the heavy convs move off CPU (which is thread-constrained here).
+    try:
+        import perth
+        MODEL.watermarker = perth.PerthImplicitWatermarker(device=DEVICE)
+        logger.info("PerTh watermarker initialized on %s", DEVICE)
+    except Exception:
+        logger.exception("Failed to move PerTh watermarker to %s; watermarking stays on CPU", DEVICE)
+
     # Default voice (reference clip must be > 5s; ideally 6-15s)
     set_ref_audio(TTS_REF_AUDIO)
 
