@@ -1,0 +1,24 @@
+# Constraints for the chatterbox-tts engine build.
+#
+# gfx1201 (Radeon R9700 AI Pro) needs ROCm 7.x, and the only torch/torchaudio
+# matched pair on the pytorch.org rocm7.2 index is 2.11.0 — see Dockerfile.chatterbox.
+# chatterbox-tts==0.1.7 hard-pins torch==2.6.0 / torchaudio==2.6.0 / numpy<2.0, but
+# it is installed with --no-deps so those pins never reach the resolver. These
+# constraints freeze the torch stack so the transitive deps (s3tokenizer, conformer,
+# transformers, diffusers, ...) installed from PyPI (+ rocm7.2 extra-index) cannot
+# "upgrade" torch to a CUDA build from PyPI and silently replace the ROCm runtime.
+# The local-version segment (+rocm7.2) is required for pip's == to match the
+# installed wheel.
+#
+# numpy stays on 1.26.x to match chatterbox's tested matrix for Python <3.13
+# (its metadata declares numpy<2.0.0 there). transformers 5.2.0 only needs
+# numpy>=1.17, so 1.26.4 satisfies both.
+torch==2.11.0+rocm7.2
+torchaudio==2.11.0+rocm7.2
+
+numpy==1.26.4
+transformers==5.2.0
+diffusers==0.29.0
+safetensors==0.5.3
+librosa==0.11.0
+conformer==0.3.2

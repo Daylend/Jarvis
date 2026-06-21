@@ -107,7 +107,9 @@ services:
     environment:
       - TTS_ENGINE=${TTS_ENGINE:-f5}
       - TTS_DEVICE=cuda:0
-      - TTS_REF_AUDIO=/app/voice_samples/ultron.wav # Chatterbox needs mp3; F5/dots.tts accept wav or mp3
+      # Chatterbox requires mp3; F5/dots.tts accept wav or mp3. Override
+      # TTS_REF_AUDIO (e.g. /app/voice_samples/ultron.mp3) when TTS_ENGINE=chatterbox.
+      - TTS_REF_AUDIO=${TTS_REF_AUDIO:-/app/voice_samples/ultron.wav}
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
       # F5-TTS specific config (ignored if TTS_ENGINE != f5)

@@ -1,4 +1,21 @@
-ARG BASE_IMAGE=rocm/pytorch:rocm6.4.2_ubuntu22.04_py3.10_pytorch_release_2.6.0
+# chatterbox-tts (Turbo) engine sidecar — built for AMD gfx1201 (Radeon R9700 AI Pro).
+#
+# Why this base and not rocm/pytorch (like the original F5/Chatterbox Dockerfiles):
+# gfx1201 needs ROCm 7.x. The rocm/pytorch bases max out at torch 2.9.1 on ROCm 7.2
+# and ship a conda torch that fights any pip overlay (the libtorch_hip.so "cannot
+# open shared object file" failure). chatterbox-tts==0.1.7 hard-pins torch==2.6.0 /
+# torchaudio==2.6.0, which predates ROCm 7 / gfx1201 support entirely, so the stock
+# rocm6.4.2 base that the old Dockerfile used cannot run on this GPU.
+#
+# The clean path is the same bare ROCm dev base the dots.tts / llama.cpp sidecars
+# use (rocm/dev-ubuntu-24.04:7.2.1-complete, proven working on this GPU) with a
+# fresh matched pip pair from the rocm7.2 index:
+#   torch 2.11.0+rocm7.2 + torchaudio 2.11.0+rocm7.2
+# chatterbox itself is installed --no-deps so its torch==2.6.0 pin is ignored; the
+# constraints file then prevents any transitive dep from swapping torch back to a
+# CUDA/PyPI build. Chatterbox's Turbo model uses only standard torch/torchaudio
+# APIs and runs fine on 2.11.
+ARG BASE_IMAGE=rocm/dev-ubuntu-24.04:7.2.1-complete
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
@@ -6,47 +23,99 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models/hf
 ENV TORCH_HOME=/models/torch
+# torch/lib .so files link the ROCm runtime libs (libMIOpen, libhipblas, ...);
+# the dev base does not set LD_LIBRARY_PATH, so point it at /opt/rocm/lib.
+ENV LD_LIBRARY_PATH=/opt/rocm/lib
+ENV TTS_DEVICE=cuda:0
 ENV TTS_PORT=8860
 ENV TTS_ENGINE=chatterbox
 ENV TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+# Chatterbox Turbo defaults — see services/tts/app/config.py for the full set + docs.
+ENV CHATTERBOX_TEMPERATURE=0.8
+ENV CHATTERBOX_TOP_P=0.95
+ENV CHATTERBOX_TOP_K=1000
+ENV CHATTERBOX_REPETITION_PENALTY=1.2
+ENV CHATTERBOX_NORM_LOUDNESS=true
 ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+# MIOpen solver selection for gfx1201 (RDNA 4 / R9700 AI Pro). The conformer / s3gen
+# convs hit the same slow GemmFwdRest path as dots.tts' BigVGAN decoder under the
+# default DYNAMIC_HYBRID mode, so pin HYBRID and persist the solver DB + JIT kernels
+# under the /models volume (tts-models:/models). Set MIOPEN_TUNE=1 only for a
+# deliberate warm-up/tuning run (see docker/entrypoint.chatterbox.sh).
+ENV MIOPEN_FIND_MODE=HYBRID
+ENV MIOPEN_USER_DB_PATH=/models/miopen/userdb
+ENV MIOPEN_CUSTOM_CACHE_DIR=/models/miopen/kernel-cache
+ENV MIOPEN_TUNE=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg git ca-certificates curl && rm -rf /var/lib/apt/lists/*
+    ffmpeg git ca-certificates curl python3-pip python-is-python3 \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY services/tts/constraints.txt /app/constraints.txt
+COPY services/tts/constraints.chatterbox.txt /app/constraints.chatterbox.txt
 
-# The ROCm base image ships torch + torchvision but NOT torchaudio. Install the matching
-# ROCm torchaudio explicitly so s3tokenizer/conformer/chatterbox don't pull a CUDA build.
-RUN python3 -m pip install --upgrade pip wheel setuptools \
- && python3 -m pip install --no-cache-dir --no-deps \
-      "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp310-cp310-linux_x86_64.whl" \
- && python3 -m pip install --no-cache-dir -c /app/constraints.txt \
-      "numpy>=1.24.0,<2.0.0" \
-      librosa==0.11.0 \
-      s3tokenizer \
-      transformers==5.2.0 \
-      diffusers==0.29.0 \
-      "resemble-perth>=1.0.0" \
-      conformer==0.3.2 \
-      safetensors==0.5.3 \
-      spacy-pkuseg \
-      pykakasi==2.3.0 \
-      gradio==6.8.0 \
-      pyloudnorm \
-      omegaconf \
- && python3 -m pip install --no-cache-dir --no-deps \
-      --index-url https://download.pytorch.org/whl/cpu \
-      "torchcodec==0.2.*" \
- && python3 -m pip install --no-cache-dir --no-deps chatterbox-tts==0.1.7
+# 1) torch 2.11.0 + torchaudio 2.11.0 from the rocm7.2 index. No --no-deps:
+#    this also pulls torch's own deps (triton-rocm==3.6.0, typing_extensions,
+#    sympy, networkx, jinja2, fsspec, filelock) which only exist on this index.
+# 2) chatterbox-tts itself --no-deps so its torch==2.6.0 / torchaudio==2.6.0 /
+#    numpy<2.0 pins never constrain the resolver (we override the torch stack
+#    to the ROCm 7.2 pair above).
+# 3) chatterbox runtime transitive deps from PyPI + rocm7.2 as extra-index. The
+#    constraints file freezes torch/torchaudio so pip can't swap them for CUDA
+#    builds, and pins the chatterbox-version-matched scientific deps.
+#    pykakasi / spacy-pkuseg are only used by the multilingual (zh/ja) tokenizer
+#    path, which Chatterbox imports lazily under try/except — the English Turbo
+#    model never needs them, so they are omitted to keep the image lean.
+#    gradio is a demo-UI-only dep (the HuggingFace Space) and is never imported
+#    by chatterbox.tts_turbo, so it is omitted too.
+# 4) fastapi sidecar deps (not part of chatterbox-tts).
+RUN pip3 install --no-cache-dir --break-system-packages \
+        --index-url https://download.pytorch.org/whl/rocm7.2 \
+        torch==2.11.0 torchaudio==2.11.0 \
+    && pip3 install --no-cache-dir --break-system-packages --no-deps \
+        chatterbox-tts==0.1.7 \
+    && pip3 install --no-cache-dir --break-system-packages \
+        --extra-index-url https://download.pytorch.org/whl/rocm7.2 \
+        -c /app/constraints.chatterbox.txt \
+        einops \
+        huggingface-hub \
+        "librosa==0.11.0" \
+        "numpy==1.26.4" \
+        omegaconf \
+        "safetensors==0.5.3" \
+        "transformers==5.2.0" \
+        "diffusers==0.29.0" \
+        "conformer==0.3.2" \
+        s3tokenizer \
+        "resemble-perth>=1.0.0" \
+        pyloudnorm \
+        scipy \
+        tqdm \
+        fastapi \
+        "uvicorn[standard]"
 
 COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
-RUN mkdir -p /app/data /models/hf /models/torch && chmod -R 777 /app/data /models
+
+RUN mkdir -p \
+        /app/data \
+        /models/hf \
+        /models/torch \
+        /models/miopen/userdb \
+        /models/miopen/kernel-cache \
+    && chmod -R 777 /app/data /models
+
+COPY services/tts/docker/entrypoint.chatterbox.sh /app/entrypoint.chatterbox.sh
+RUN chmod 0755 /app/entrypoint.chatterbox.sh
 
 EXPOSE 8860
 
+# Chatterbox Turbo is ~350M params; the first-run HF snapshot_download is smaller
+# than dots.tts (~5GB) but still multi-GB, so keep a generous start period.
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=600s \
     CMD curl -f http://localhost:8860/healthz || exit 1
 
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]
+ENTRYPOINT ["/app/entrypoint.chatterbox.sh"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8860", "--workers", "1"]
