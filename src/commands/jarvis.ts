@@ -1,5 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, AutocompleteInteraction, EmbedBuilder } from 'discord.js';
 import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 import { config } from '../config';
 import { clearAllHistory } from '../voice/jarvis-handler';
 import { personalityStore } from '../voice/personality-store';
@@ -91,6 +93,39 @@ export const jarvisCommand: Command = {
             .setName('status')
             .setDescription('Show current session status and sidecar health'),
         ),
+    )
+    .addSubcommandGroup((g) =>
+      g.setName('ack').setDescription('Manage voice acknowledgement (sound + green indicator)')
+        .addSubcommand((s) =>
+          s.setName('show').setDescription('Show the active personality ack config'),
+        )
+        .addSubcommand((s) =>
+          s.setName('list').setDescription('List available ack sounds in the sounds folder'),
+        )
+        .addSubcommand((s) =>
+          s.setName('set')
+            .setDescription('Set the ack sound for the active personality (pick from folder)')
+            .addStringOption((o) =>
+              o.setName('name').setDescription('Sound filename').setRequired(true).setAutocomplete(true),
+            ),
+        )
+        .addSubcommand((s) =>
+          s.setName('upload')
+            .setDescription('Upload a new ack sound and set it for the active personality')
+            .addAttachmentOption((o) =>
+              o.setName('file').setDescription('Audio file (.wav .mp3 .flac .ogg .m4a .opus)').setRequired(true),
+            ),
+        )
+        .addSubcommand((s) =>
+          s.setName('enable')
+            .setDescription('Enable or disable ack for the active personality')
+            .addBooleanOption((o) =>
+              o.setName('enabled').setDescription('Enable or disable').setRequired(true),
+            ),
+        )
+        .addSubcommand((s) =>
+          s.setName('test').setDescription('Play the current ack sound once in your voice channel'),
+        ),
     ),
 
   autocomplete: async (interaction: AutocompleteInteraction) => {
@@ -129,6 +164,16 @@ export const jarvisCommand: Command = {
       );
       await interaction.respond(
         filtered.slice(0, 25).map((m) => ({ name: `${m.id} (${m.status})`, value: m.id })),
+      );
+      return;
+    }
+
+    if (group === 'ack') {
+      const focused = interaction.options.getFocused();
+      const sounds = personalityStore.listSounds();
+      const filtered = sounds.filter((s) => s.toLowerCase().includes(focused.toLowerCase()));
+      await interaction.respond(
+        filtered.slice(0, 25).map((s) => ({ name: s, value: s })),
       );
       return;
     }
@@ -397,6 +442,130 @@ export const jarvisCommand: Command = {
           .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
+      }
+    }
+
+    if (group === 'ack') {
+      if (sub === 'show') {
+        await interaction.deferReply({ ephemeral: true });
+        const ack = personalityStore.getAckConfig();
+        const p = personalityStore.getActive();
+        await interaction.editReply(
+          `Personality: **${p?.name ?? '?'}** (${personalityStore.getActiveId()})\n` +
+          `Ack enabled: **${ack.ackEnabled ? 'yes' : 'no'}**\n` +
+          `Ack sound: \`${ack.ackSound}\` ${ack.soundPath ? '✓' : '⚠ (file not found)'}\n` +
+          `Source: ${ack.source}`,
+        );
+        return;
+      }
+
+      if (sub === 'list') {
+        await interaction.deferReply({ ephemeral: true });
+        const sounds = personalityStore.listSounds();
+        const ack = personalityStore.getAckConfig();
+        const embed = new EmbedBuilder()
+          .setTitle('Ack Sounds')
+          .setColor(0x5865f2);
+        if (sounds.length === 0) {
+          embed.setDescription(`No audio files found in \`${config.soundsDir}\`.`);
+        } else {
+          const lines = sounds.map((s) =>
+            s === ack.ackSound ? `▶ **${s}** (active)` : `  ${s}`,
+          );
+          embed.setDescription(lines.join('\n'));
+        }
+        await interaction.editReply({ embeds: [embed] });
+        return;
+      }
+
+      if (sub === 'set') {
+        await interaction.deferReply({ ephemeral: true });
+        const name = interaction.options.getString('name', true);
+        const id = personalityStore.getActiveId();
+        if (!id) {
+          await interaction.editReply('No active personality.');
+          return;
+        }
+        const soundPath = personalityStore.resolveSoundPath(name);
+        if (!soundPath) {
+          await interaction.editReply(`❌ Sound not found in \`${config.soundsDir}\`: ${name}`);
+          return;
+        }
+        personalityStore.setAckOverride(id, { ackSound: name });
+        await interaction.editReply(`Ack sound → **${name}** (for active personality).`);
+        return;
+      }
+
+      if (sub === 'upload') {
+        await interaction.deferReply({ ephemeral: true });
+        const attachment = interaction.options.getAttachment('file', true);
+        const allowed = ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.opus'];
+        const ext = path.extname(attachment.name).toLowerCase();
+        if (!allowed.includes(ext)) {
+          await interaction.editReply(`❌ Unsupported file type \`${ext}\`. Allowed: ${allowed.join(', ')}`);
+          return;
+        }
+        // Sanitize filename: basename + alnum/-/_/. only
+        const safeName = path.basename(attachment.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+        if (!safeName) {
+          await interaction.editReply('❌ Invalid filename.');
+          return;
+        }
+        try {
+          if (!fs.existsSync(config.soundsDir)) {
+            fs.mkdirSync(config.soundsDir, { recursive: true });
+          }
+          const dest = path.join(config.soundsDir, safeName);
+          // Path traversal guard: resolved dest must be inside soundsDir.
+          const resolvedDir = path.resolve(config.soundsDir);
+          const resolvedDest = path.resolve(dest);
+          if (resolvedDest !== resolvedDir && !resolvedDest.startsWith(resolvedDir + path.sep)) {
+            await interaction.editReply('❌ Invalid destination path.');
+            return;
+          }
+          const res = await axios.get(attachment.url, { responseType: 'arraybuffer', timeout: 30_000 });
+          fs.writeFileSync(dest, Buffer.from(res.data));
+          const id = personalityStore.getActiveId();
+          if (id) personalityStore.setAckOverride(id, { ackSound: safeName });
+          await interaction.editReply(`Uploaded and set ack sound → **${safeName}** (${res.data.length} bytes).`);
+        } catch (err) {
+          await interaction.editReply(`❌ Upload failed: ${(err as Error).message}`);
+        }
+        return;
+      }
+
+      if (sub === 'enable') {
+        await interaction.deferReply({ ephemeral: true });
+        const enabled = interaction.options.getBoolean('enabled', true);
+        const id = personalityStore.getActiveId();
+        if (!id) {
+          await interaction.editReply('No active personality.');
+          return;
+        }
+        personalityStore.setAckOverride(id, { ackEnabled: enabled });
+        await interaction.editReply(`Ack **${enabled ? 'enabled' : 'disabled'}** for active personality.`);
+        return;
+      }
+
+      if (sub === 'test') {
+        await interaction.deferReply({ ephemeral: true });
+        const ctx = sessionManager.get(interaction.guildId!);
+        if (!ctx) {
+          await interaction.editReply('❌ No active voice session in this server. Start listening first.');
+          return;
+        }
+        const ack = personalityStore.getAckConfig();
+        if (!ack.soundPath) {
+          await interaction.editReply(`❌ Ack sound file not found: \`${ack.ackSound}\``);
+          return;
+        }
+        try {
+          await ttsClient.playSoundFile(ctx.connection, ack.soundPath, ctx.guildId);
+          await interaction.editReply(`▶ Played ack sound **${ack.ackSound}** once.`);
+        } catch (err) {
+          await interaction.editReply(`❌ Failed to play: ${(err as Error).message}`);
+        }
+        return;
       }
     }
   },

@@ -1,6 +1,7 @@
 import type { Client, VoiceBasedChannel } from 'discord.js';
 import { config } from '../config';
 import { transcriptStore } from './transcript-store';
+import { personalityStore } from './personality-store';
 import type { SessionContext, AsrMessage } from './types';
 import { phraseTriggerRegistry } from './phrase-trigger-registry';
 
@@ -56,6 +57,24 @@ class ActionRouter {
   onPartial(_ctx: SessionContext, _msg: AsrMessage): void {
   }
 
+  /**
+   * Begin a voice acknowledgement (ack sound + green speaking indicator held
+   * through processing) for the given session. Only fires when ack is enabled
+   * for the active personality and a valid sound file resolves. Safe to call
+   * repeatedly — overlapping triggers maintain the hold via a refcount without
+   * replaying the sound.
+   */
+  private triggerAck(ctx: SessionContext): void {
+    try {
+      const ack = personalityStore.getAckConfig();
+      if (!ack.ackEnabled || !ack.soundPath) return;
+      const { ttsClient } = require('./tts-client');
+      ttsClient.beginAck(ctx.connection, ack.soundPath, ctx.guildId);
+    } catch (err) {
+      console.warn('[jarvis] Failed to trigger ack:', (err as Error).message);
+    }
+  }
+
   async onFinal(
     ctx: SessionContext,
     msg: AsrMessage & { textNormalized: string; userId: string },
@@ -74,6 +93,8 @@ class ActionRouter {
           } else {
             console.log(`[jarvis] final for already-dispatched utterance lineId=${msg.lineId} — skipping`);
           }
+          // Speaker has finished (final transcript) — acknowledge now.
+          this.triggerAck(ctx);
           this.dispatchedKeys.delete(key);
           this.dispatchedTexts.delete(key);
         }
@@ -98,6 +119,8 @@ class ActionRouter {
 
           if (command) {
             console.log(`[jarvis] dispatching from final streamId=${msg.streamId} lineId=${msg.lineId} command="${command}"`);
+            // Speaker has finished (final transcript) — acknowledge now.
+            this.triggerAck(ctx);
             void this.dispatchJarvis(ctx, msg, command).catch((err) =>
               console.error('[jarvis] Handler error:', err),
             );
@@ -123,6 +146,13 @@ class ActionRouter {
 
     for (const t of filteredMatches) {
       phraseTriggerRegistry.touch(t.id);
+      // Acknowledge if this trigger's utterance contains the wake word (e.g. a
+      // public phrase trigger that fires when anyone says "jarvis"). This does
+      // not double-fire for the owner wake-word because those are filtered out
+      // above; non-wake-word phrase triggers (e.g. "pa is up") do not ack.
+      if (msg.textNormalized.toLowerCase().includes(config.triggerPhrase.toLowerCase())) {
+        this.triggerAck(ctx);
+      }
       if (t.oneShot) {
         const { scheduler } = await import('./scheduler');
         void scheduler.cancel(t.id);

@@ -7,6 +7,7 @@ services:
       - /srv/docker/appdata/paxfax/data:/app/data
       - /srv/docker/appdata/paxfax/logs:/app/logs
       - /srv/docker/appdata/paxfax/personalities:/app/personalities
+      - /srv/docker/appdata/paxfax/sounds:/app/sounds
     environment:
       - PUID=1000
       - PGID=1000
@@ -37,6 +38,7 @@ services:
       - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-Jarvis}
       - TTS_URL=${TTS_URL:-http://tts:8860}
+      - SOUNDS_DIR=/app/sounds
     logging:
       driver: "json-file"
       options:

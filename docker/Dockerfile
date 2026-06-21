@@ -53,6 +53,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/personalities ./personalities
+COPY --from=builder /app/sounds /app/sounds-seed
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /app/entrypoint.sh

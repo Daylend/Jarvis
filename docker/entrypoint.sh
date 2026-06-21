@@ -39,6 +39,18 @@ fi
 # Display logs directory
 echo "Logs will be written to $(ls -la /app/logs)"
 
+# Ensure sounds directory exists and seed it from the image-baked defaults
+# if the mount is empty (fresh host folder). The seed is copied (not moved)
+# so existing user sounds are preserved on subsequent starts.
+mkdir -p /app/sounds
+if [ ! -f "/app/sounds/06_web_fan_195hz.wav" ] && [ -d "/app/sounds-seed" ]; then
+  echo "Seeding /app/sounds from /app/sounds-seed"
+  cp -rn /app/sounds-seed/. /app/sounds/ 2>/dev/null || cp -r /app/sounds-seed/. /app/sounds/
+fi
+if [ -n "$PUID" ] && [ -n "$PGID" ]; then
+  chown -R node:node /app/sounds 2>/dev/null || true
+fi
+
 # Run as node user
 echo "Running database setup and starting application as $(id)"
 su-exec node npx prisma migrate deploy

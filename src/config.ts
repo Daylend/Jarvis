@@ -156,6 +156,10 @@ const envSchema = z.object({
   PERSONALITIES_DIR: z.string().default('/app/personalities'),
   DEFAULT_PERSONALITY: z.string().default('jarvis'),
   PERSONALITY_STATE_PATH: z.string().default('/app/data/personality-state.json'),
+  // Acknowledgement (voice)
+  SOUNDS_DIR: z.string().default('/app/sounds'),
+  ACK_SOUND_DEFAULT: z.string().default('06_web_fan_195hz.wav'),
+  ACK_ENABLED_DEFAULT: z.enum(['true', 'false']).default('true'),
   // Reminders / triggers
   REMINDER_TIMEZONE: z.string().default('America/New_York'),
 });
@@ -199,6 +203,10 @@ export const config = {
   personalitiesDir: env.PERSONALITIES_DIR,
   defaultPersonality: env.DEFAULT_PERSONALITY,
   personalityStatePath: env.PERSONALITY_STATE_PATH,
+  // Acknowledgement (voice)
+  soundsDir: env.SOUNDS_DIR,
+  ackSoundDefault: env.ACK_SOUND_DEFAULT,
+  ackEnabledDefault: env.ACK_ENABLED_DEFAULT === 'true',
   // Reminders / triggers
   reminderTimezone: env.REMINDER_TIMEZONE,
 };

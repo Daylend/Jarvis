@@ -82,6 +82,7 @@ The project includes a `docker-compose.yml` for local development and `docker/do
 - `src/voice/`: Voice transcription subsystem.
 - `services/asr/`: Python ASR sidecar with pluggable engines (Granite, Whisper).
 - `prisma/schema.prisma`: Database schema definition.
+- `sounds/`: Acknowledgement sound files (mounted at `/app/sounds`).
 
 ---
 
@@ -221,3 +222,38 @@ When the owner says **"Jarvis, \<command\>"** in a voice channel:
 
 **Current handler:** logs to console.
 **Future hook:** set `actionRouter.setHandler(async ({ command, contextBlock }) => { /* call llamacpp */ })` in `src/index.ts`.
+
+---
+
+## Voice Acknowledgement (ack)
+
+When Jarvis is triggered by hearing his name in a voice channel — either the owner's wake word ("Jarvis, …") or a public phrase trigger whose utterance contains the wake word — he acknowledges it:
+
+1. After the speaker finishes (ASR final transcript), the **ack sound** plays in the voice channel and Discord's **speaking indicator turns green**.
+2. The green indicator **holds continuously through LLM thinking** via a silent audio stream (no audible noise).
+3. When Jarvis finishes speaking (TTS) or the loop ends, the indicator turns off.
+
+DM Jarvis messages and time/skill triggers do **not** ack (no one is waiting in voice).
+
+### Sounds folder
+Ack sounds live in the mounted `sounds/` folder (`/app/sounds` in the container). A seed sound (`06_web_fan_195hz.wav`) is bundled in the image and auto-seeded into an empty host folder on first start. Supported formats: `.wav .mp3 .flac .ogg .m4a .opus`.
+
+### Personality settings (optional)
+A personality YAML may declare ack defaults:
+
+```yaml
+ack_sound: 06_web_fan_195hz.wav   # filename in sounds/
+ack_enabled: true                  # toggle ack for this personality
+```
+
+Runtime overrides (from the Discord commands below) are stored in `personality-state.json` and take precedence over the YAML; the YAML is never modified.
+
+### `/jarvis ack` (owner-only, ephemeral)
+| Subcommand | Options | Description |
+|---|---|---|
+| `show` | | Show the active personality ack config (enabled, sound, file status, source) |
+| `list` | | List audio files in the sounds folder |
+| `set` | `name` (required, autocomplete) | Pick an existing sound from the folder for the active personality |
+| `upload` | `file` attachment (required) | Upload a new sound, save it to the folder, and set it for the active personality |
+| `enable` | `enabled` (required) | Toggle ack on/off for the active personality |
+| `test` | | Play the current ack sound once in your voice channel |

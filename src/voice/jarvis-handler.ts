@@ -430,6 +430,15 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     }
   } finally {
     releaseLock!();
+    // Release the ack hold for this guild (no-op if no ack session / not in voice).
+    if (guildId) {
+      try {
+        const { ttsClient } = await import('./tts-client');
+        ttsClient.endAck(guildId);
+      } catch (err) {
+        console.warn('[jarvis] Failed to release ack:', (err as Error).message);
+      }
+    }
   }
 }
 
