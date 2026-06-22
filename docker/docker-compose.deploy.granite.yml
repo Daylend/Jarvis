@@ -136,6 +136,9 @@ services:
       # utterances), then restart with MIOPEN_TUNE=0. The tuned solver DB and
       # JIT kernels persist under the /models volume (tts-models:/models).
       - MIOPEN_TUNE=${MIOPEN_TUNE:-0}
+      - MIOPEN_FIND_MODE=${MIOPEN_FIND_MODE:-DYNAMIC_HYBRID}
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+      - TORCHINDUCTOR_CACHE_DIR=/models/torchinductor/f5-aotriton
     volumes:
       - /srv/docker/appdata/paxfax/voice_samples:/app/voice_samples
       - /srv/docker/appdata/paxfax/tts-models:/models
