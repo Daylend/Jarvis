@@ -1,0 +1,3 @@
+- Add speaking interrupt via Jarvis wake word
+- How are we handling if someone says jarvis twice in a sentence? Or in rapid succession?
+- 

@@ -1,0 +1,1 @@
+You are running on the dev's local machine. Do not install/run tools in the local environment. Everything is managed through containers (check docker files). For deployment, builds are run through a gitlab runner (.gitlab-ci.yml) and deployed via dockhand on a remote server (.deploy docker compose files).
