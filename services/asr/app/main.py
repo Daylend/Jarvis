@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .engines import get_engine
 from .session import AsrSession
+from .smart_turn import get_pool
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +22,11 @@ async def lifespan(app: FastAPI):
     engine = get_engine()
     await engine.start()
     logger.info("[lifespan] ASR ready: engine=%s", settings.engine)
+    # Eagerly load Smart Turn (downloads + verifies the ONNX on first start so
+    # a missing/broken model fails fast instead of on the first user turn).
+    get_pool().initialize()
     yield
+    get_pool().shutdown()
     logger.info("Shutting down ASR sidecar.")
 
 
@@ -30,10 +35,18 @@ app = FastAPI(title="PaxFax ASR Sidecar", lifespan=lifespan)
 
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
+    st = get_pool().status
     return JSONResponse({
         "ok": True,
         "sampleRate": settings.sample_rate,
         "partials": settings.enable_partials,
+        "smartTurn": {
+            "enabled": st.enabled,
+            "loaded": st.loaded,
+            "model": st.model,
+            "sha256": st.sha256,
+            "error": st.error,
+        },
         **get_engine().health(),
     })
 

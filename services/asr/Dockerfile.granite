@@ -9,6 +9,9 @@ ENV OMP_NUM_THREADS=2
 ENV MKL_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1
 ENV NUMEXPR_NUM_THREADS=1
+# Smart Turn ONNX cache (downloaded on first start, persisted via the
+# /models volume so restarts don't re-download).
+ENV HF_HOME=/models/hf
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \

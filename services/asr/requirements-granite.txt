@@ -5,3 +5,9 @@ soundfile
 silero-vad
 pydantic
 httpx
+# Smart Turn v3.x (semantic end-of-turn) — local ONNX inference only.
+# transformers pinned to the version the v3.2 ONNX was exported with; provides
+# WhisperFeatureExtractor. huggingface-hub resolves the ONNX at startup.
+transformers==4.48.2
+onnxruntime
+huggingface-hub

@@ -26,6 +26,10 @@ interface SessionState {
   finalTextsByStream: Map<number, Set<string>>;
   /** streamId -> last final info (original text + endMs), used to trim cross-segment overlap */
   lastFinalText: Map<number, { text: string; endMs: number }>;
+  /** Provisional finals held open waiting for a possible `reopen` (Smart Turn).
+   *  Keyed by `${streamId}:${lineId}`. On `reopen` the entry is dropped (no
+   *  persist, no dispatch). On grace timeout the entry commits via handleFinal. */
+  pendingProvisional: Map<string, { msg: AsrMessage; timer: ReturnType<typeof setTimeout> }>;
 }
 
 const MAX_BUFFERED = 1_000_000; // 1 MB
@@ -126,6 +130,7 @@ class AsrClient {
       finalsByStream: new Map(),
       finalTextsByStream: new Map(),
       lastFinalText: new Map(),
+      pendingProvisional: new Map(),
     };
     this.sessions.set(ctx.id, state);
     this.connect(state);
@@ -137,6 +142,8 @@ class AsrClient {
     state.destroyed = true;
     if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
     if (state.pingInterval) clearInterval(state.pingInterval);
+    for (const held of state.pendingProvisional.values()) clearTimeout(held.timer);
+    state.pendingProvisional.clear();
     if (state.ws) {
       try { state.ws.close(1000, 'session-stop'); } catch { /* ignore */ }
     }
@@ -161,6 +168,13 @@ class AsrClient {
     state.finalsByStream.delete(streamId);
     state.finalTextsByStream.delete(streamId);
     state.lastFinalText.delete(streamId);
+    // Drop any held provisional finals for this stream (no reopen will arrive).
+    for (const [key, held] of state.pendingProvisional) {
+      if (key.startsWith(`${streamId}:`)) {
+        clearTimeout(held.timer);
+        state.pendingProvisional.delete(key);
+      }
+    }
     state.streamUsers.delete(streamId);
     closesTotal++;
     this.sendJson(state, { type: 'close', streamId });
@@ -284,10 +298,28 @@ class AsrClient {
       }
 
       case 'final':
-        this.handleFinal(state, msg).catch((err) =>
-          console.error('[asr-client] handleFinal error:', err),
-        );
+        if (msg.provisional && msg.streamId !== undefined && msg.lineId !== undefined) {
+          this.holdProvisional(state, msg);
+        } else {
+          this.handleFinal(state, msg).catch((err) =>
+            console.error('[asr-client] handleFinal error:', err),
+          );
+        }
         break;
+
+      case 'reopen': {
+        if (msg.streamId === undefined || msg.lineId === undefined) break;
+        const key = `${msg.streamId}:${msg.lineId}`;
+        const held = state.pendingProvisional.get(key);
+        if (held) {
+          clearTimeout(held.timer);
+          state.pendingProvisional.delete(key);
+          console.log(`[asr-client] reopen streamId=${msg.streamId} lineId=${msg.lineId} — provisional final dropped (no dispatch, no ack)`);
+        } else {
+          console.log(`[asr-client] reopen streamId=${msg.streamId} lineId=${msg.lineId} — no held provisional (already committed or unknown)`);
+        }
+        break;
+      }
 
       case 'error':
         console.error(`[asr-client] Sidecar error on stream ${msg.streamId}: ${msg.message}`);
@@ -299,6 +331,31 @@ class AsrClient {
       default:
         console.warn('[asr-client] Unknown message type:', (msg as any).type);
     }
+  }
+
+  private holdProvisional(state: SessionState, msg: AsrMessage): void {
+    const streamId = msg.streamId!;
+    const lineId = msg.lineId!;
+    const key = `${streamId}:${lineId}`;
+
+    // If a reopen already arrived and cleared the slot, or we already hold one
+    // for this lineId, don't re-arm.
+    if (state.pendingProvisional.has(key)) {
+      console.log(`[asr-client] provisional final re-received (dropped) streamId=${streamId} lineId=${lineId}`);
+      return;
+    }
+
+    const grace = config.smartTurnCommitGraceMs;
+    const timer = setTimeout(() => {
+      state.pendingProvisional.delete(key);
+      console.log(`[asr-client] provisional final committed (no reopen within ${grace}ms) streamId=${streamId} lineId=${lineId}`);
+      this.handleFinal(state, msg).catch((err) =>
+        console.error('[asr-client] handleFinal (provisional commit) error:', err),
+      );
+    }, grace);
+
+    state.pendingProvisional.set(key, { msg, timer });
+    console.log(`[asr-client] provisional final held streamId=${streamId} lineId=${lineId} grace=${grace}ms text="${(msg.text ?? '').slice(0, 80)}"`);
   }
 
   private async handleFinal(state: SessionState, msg: AsrMessage): Promise<void> {

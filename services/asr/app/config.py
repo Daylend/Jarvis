@@ -42,5 +42,19 @@ class Settings(BaseModel):
 
     max_buffer_s: float = 32.0
 
+    # --- Smart Turn (semantic end-of-turn) ---
+    smart_turn_enabled: bool = os.getenv("ASR_SMART_TURN_ENABLED", "true").lower() == "true"
+    # HF filename (resolved against smart_turn_repo) or an absolute path to a
+    # local ONNX file. The int8 CPU model is the default (small + fast on CPU).
+    smart_turn_model: str = os.getenv("ASR_SMART_TURN_MODEL", "smart-turn-v3.2-cpu.onnx")
+    smart_turn_repo: str = os.getenv("ASR_SMART_TURN_REPO", "pipecat-ai/smart-turn-v3")
+    smart_turn_sample_rate: int = int(os.getenv("ASR_SMART_TURN_SAMPLE_RATE", "16000"))
+    smart_turn_window_s: float = float(os.getenv("ASR_SMART_TURN_WINDOW_S", "8"))
+    smart_turn_trigger_silence_ms: int = int(os.getenv("ASR_SMART_TURN_TRIGGER_SILENCE_MS", "200"))
+    smart_turn_complete_threshold: float = float(os.getenv("ASR_SMART_TURN_COMPLETE_THRESHOLD", "0.50"))
+    smart_turn_commit_grace_ms: int = int(os.getenv("ASR_SMART_TURN_COMMIT_GRACE_MS", "100"))
+    smart_turn_hard_silence_ms: int = int(os.getenv("ASR_SMART_TURN_HARD_SILENCE_MS", "1200"))
+    smart_turn_max_concurrency: int = int(os.getenv("ASR_SMART_TURN_MAX_CONCURRENCY", "4"))
+
 
 settings = Settings()

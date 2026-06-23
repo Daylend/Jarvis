@@ -30,7 +30,7 @@ export interface AsrSegment {
 
 /** Shape of any message received from the ASR sidecar. The discriminator is `type`. */
 export interface AsrMessage {
-  type: 'ready' | 'partial' | 'final' | 'error' | 'pong';
+  type: 'ready' | 'partial' | 'final' | 'reopen' | 'error' | 'pong';
   streamId?: number;
   /** Stable per-utterance id from the ASR engine. Present on every `partial` and `final`. */
   lineId?: number | string;
@@ -42,4 +42,7 @@ export interface AsrMessage {
   engine?: string;
   model?: string;
   vulkan?: boolean;
+  /** True when Smart Turn closed the segment early and the bot should hold the
+   *  final for a grace window in case a `reopen` arrives (speech resumed). */
+  provisional?: boolean;
 }

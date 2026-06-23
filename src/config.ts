@@ -131,6 +131,9 @@ const envSchema = z.object({
   JARVIS_CONTEXT_SECONDS: z.coerce.number().default(90),
   EARLY_JARVIS_PARTIALS: z.enum(['true', 'false']).default('true'),
   EARLY_JARVIS_CUTOFF_MS: z.coerce.number().int().min(0).default(2000),
+  // Smart Turn provisional-final hold: how long the bot waits for a `reopen`
+  // before committing a provisional final to the wake-word dispatch path.
+  SMART_TURN_COMMIT_GRACE_MS: z.coerce.number().int().min(0).default(100),
   // LLM
   LLAMA_CPP_URL: z.string().url().default('http://llama-cpp:8080/v1'),
   LLAMA_CPP_MODEL: z.string().default('local'),
@@ -178,6 +181,7 @@ export const config = {
   jarvisContextSeconds: env.JARVIS_CONTEXT_SECONDS,
   earlyJarvisPartials: env.EARLY_JARVIS_PARTIALS === 'true',
   earlyJarvisCutoffMs: env.EARLY_JARVIS_CUTOFF_MS,
+  smartTurnCommitGraceMs: env.SMART_TURN_COMMIT_GRACE_MS,
   // LLM
   llamaCppUrl: env.LLAMA_CPP_URL,
   llamaCppModel: env.LLAMA_CPP_MODEL,

@@ -22,6 +22,20 @@ services:
       - ASR_MAX_UTTERANCE_S=10.0
       - ASR_ENDPOINT_IDLE_MS=1200
       - ASR_ENDPOINT_SILENCE_MS=600
+      # Smart Turn (semantic end-of-turn). Disabled ⇒ behavior is unchanged.
+      - ASR_SMART_TURN_ENABLED=${ASR_SMART_TURN_ENABLED:-true}
+      - ASR_SMART_TURN_MODEL=${ASR_SMART_TURN_MODEL:-smart-turn-v3.2-cpu.onnx}
+      - ASR_SMART_TURN_REPO=${ASR_SMART_TURN_REPO:-pipecat-ai/smart-turn-v3}
+      - ASR_SMART_TURN_SAMPLE_RATE=16000
+      - ASR_SMART_TURN_WINDOW_S=8
+      - ASR_SMART_TURN_TRIGGER_SILENCE_MS=200
+      - ASR_SMART_TURN_COMPLETE_THRESHOLD=0.50
+      - ASR_SMART_TURN_COMMIT_GRACE_MS=100
+      - ASR_SMART_TURN_HARD_SILENCE_MS=1200
+      - ASR_SMART_TURN_MAX_CONCURRENCY=4
+      - HF_HOME=/models/hf
+    volumes:
+      - ../asr-models:/models
     ports:
       - "8765:8765"
     healthcheck:
