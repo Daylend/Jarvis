@@ -37,6 +37,9 @@ services:
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
       - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
       - OPENROUTER_TITLE=${OPENROUTER_TITLE:-Jarvis}
+      - OPENROUTER_PROVIDER_ZDR=${OPENROUTER_PROVIDER_ZDR:-true}
+      - OPENROUTER_PROVIDER_ONLY=${OPENROUTER_PROVIDER_ONLY:-}
+      - JARVIS_LLM_STATE_PATH=${JARVIS_LLM_STATE_PATH:-/app/data/llm-state.json}
       - TTS_URL=${TTS_URL:-http://tts:8860}
       - SOUNDS_DIR=/app/sounds
     logging:

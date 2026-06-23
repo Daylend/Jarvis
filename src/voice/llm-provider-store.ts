@@ -20,6 +20,9 @@ class LlmProviderStore {
     this.thinking = config.llmThinking;
     const saved = this.readState();
     if (saved) {
+      if (saved.backend !== this.backend) {
+        console.warn(`[llm-provider] persisted backend "${saved.backend}" overrides env JARVIS_LLM_BACKEND="${this.backend}" (state file: ${config.jarvisLlmStatePath})`);
+      }
       this.backend = saved.backend;
       if (saved.openrouterModel) this.openrouterModel = saved.openrouterModel;
       if (saved.localModel) this.localModel = saved.localModel;
