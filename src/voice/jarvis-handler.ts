@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Client, Message, VoiceBasedChannel } from 'discord.js';
+import type { Client, Message, VoiceBasedChannel, GuildTextBasedChannel } from 'discord.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { config } from '../config';
 import { toolRegistry } from './jarvis-tools';
@@ -7,32 +7,31 @@ import { noteStore } from './note-store';
 import { skillStore } from './skill-store';
 import { personalityStore } from './personality-store';
 import { llmProviderStore } from './llm-provider-store';
+import { conversationStore, type StoredChatMessage } from './conversation-store';
 import type { CommandHandler, JarvisPayload, SessionContext } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
-const guildHistory = new Map<string, ChatMessage[]>();
-const guildLock = new Map<string, Promise<void>>();
 
-export function clearGuildHistory(guildId: string): void {
-  guildHistory.delete(guildId);
-  guildLock.delete(guildId);
+function ownerHistoryKey(): string {
+  return `owner:${config.ownerId}`;
+}
+
+const ownerLock = new Map<string, Promise<void>>();
+
+export function clearGuildHistory(_guildId: string): void {
+  // History is now owner-scoped + persisted; clearing is async via the store.
+  void conversationStore.clearHistory(config.ownerId).catch((err) =>
+    console.error('[jarvis] Failed to clear persisted history:', err),
+  );
 }
 
 export function clearAllHistory(): void {
-  guildHistory.clear();
-  guildLock.clear();
+  void conversationStore.clearHistory(config.ownerId).catch((err) =>
+    console.error('[jarvis] Failed to clear persisted history:', err),
+  );
 }
 
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
-  }>;
-  tool_call_id?: string;
-}
+type ChatMessage = StoredChatMessage;
 
 interface JarvisLoopOpts {
   client: Client;
@@ -183,15 +182,20 @@ async function requestApproval(
 async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
   const { client, historyKey, command, contextPreamble, guildId, channelId, replyFn, errorFn, suppressEmptyFallback } = opts;
 
-  const prev = guildLock.get(historyKey) ?? Promise.resolve();
+  const prev = ownerLock.get(historyKey) ?? Promise.resolve();
   let releaseLock: () => void;
   const current = new Promise<void>((resolve) => { releaseLock = resolve; });
-  guildLock.set(historyKey, current);
+  ownerLock.set(historyKey, current);
   await prev;
 
   try {
     const t0 = performance.now();
-    const history = guildHistory.get(historyKey) ?? [];
+    let history: ChatMessage[] = [];
+    try {
+      history = await conversationStore.loadHistory(config.ownerId);
+    } catch (err) {
+      console.error('[jarvis] Failed to load persisted history (continuing empty):', err);
+    }
 
     let systemPrompt = personalityStore.getActivePrompt();
     if (guildId) {
@@ -339,8 +343,9 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                 channelId,
                 clearHistory: () => {
                   history.length = 0;
-                  guildHistory.delete(historyKey);
-                  guildLock.delete(historyKey);
+                  void conversationStore.clearHistory(config.ownerId).catch((err) =>
+                    console.error('[jarvis] Failed to clear persisted history:', err),
+                  );
                 },
               });
               if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
@@ -392,7 +397,12 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
 
     const newMessages = messages.slice(historyStart);
     const updatedHistory = [...history, ...newMessages].slice(-config.llmMaxHistory);
-    guildHistory.set(historyKey, updatedHistory);
+    try {
+      await conversationStore.appendMessages(config.ownerId, newMessages);
+      history = updatedHistory;
+    } catch (err) {
+      console.error('[jarvis] Failed to persist new history messages:', err);
+    }
 
     const elapsed = Math.round(performance.now() - t0);
 
@@ -453,7 +463,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
 
     await runJarvisLoop({
       client,
-      historyKey: payload.ctx.guildId,
+      historyKey: ownerHistoryKey(),
       command,
       contextPreamble,
       guildId: payload.ctx.guildId,
@@ -510,7 +520,7 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
       channelId = '';
     }
 
-    const historyKey = inVoice ? guildId : `dm:${config.ownerId}`;
+    const historyKey = ownerHistoryKey();
 
     const voiceLine = inVoice
       ? `You are currently in voice channel "${channelName}".`
@@ -546,15 +556,24 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
   };
 }
 
-export async function handleDmJarvis(client: Client, message: Message): Promise<void> {
-  const historyKey = `dm:${config.ownerId}`;
-  const command = message.content.trim();
+function buildContextPreamble(memberList: string, contextBlock: string): string | null {
+  const ctxParts: string[] = [];
+  if (memberList) ctxParts.push(memberList);
+  if (contextBlock) {
+    const ctxSec = config.jarvisContextSeconds;
+    ctxParts.push(`Voice chat context (last ${ctxSec}s):\n${contextBlock}`);
+  }
+  return ctxParts.length > 0 ? ctxParts.join('\n\n') : null;
+}
 
-  if (!command) return;
+interface VoiceContext {
+  guildId: string;
+  channelId: string;
+  memberList: string;
+  contextBlock: string;
+}
 
-  const channel = message.channel as any;
-  await channel.sendTyping().catch(() => {});
-
+async function gatherVoiceContext(client: Client): Promise<VoiceContext> {
   const { sessionManager } = await import('./session-manager');
   const { transcriptStore } = await import('./transcript-store');
 
@@ -613,27 +632,26 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
           }
         }
       } catch (err) {
-        console.warn('[dm-jarvis] Failed to pull voice context:', err);
+        console.warn('[jarvis] Failed to pull voice context:', err);
       }
 
       break;
     }
   }
 
-  const dmCommand = `Owner's message (via DM): ${command}`;
+  return { guildId, channelId, memberList, contextBlock };
+}
 
-  let contextPreamble: string | null = null;
-  const ctxParts: string[] = [];
-  if (memberList) {
-    ctxParts.push(memberList);
-  }
-  if (contextBlock) {
-    const ctxSec = config.jarvisContextSeconds;
-    ctxParts.push(`Voice chat context (last ${ctxSec}s):\n${contextBlock}`);
-  }
-  if (ctxParts.length > 0) {
-    contextPreamble = ctxParts.join('\n\n');
-  }
+export async function handleDmJarvis(client: Client, message: Message): Promise<void> {
+  const command = message.content.trim();
+  if (!command) return;
+
+  const channel = message.channel as any;
+  await channel.sendTyping().catch(() => {});
+
+  const { guildId, channelId, memberList, contextBlock } = await gatherVoiceContext(client);
+  const contextPreamble = buildContextPreamble(memberList, contextBlock);
+  const dmCommand = `Owner's message (via DM): ${command}`;
 
   const replyFn = async (text: string) => {
     await channel.send(text);
@@ -641,8 +659,46 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
 
   await runJarvisLoop({
     client,
-    historyKey,
+    historyKey: ownerHistoryKey(),
     command: dmCommand,
+    contextPreamble,
+    guildId,
+    channelId,
+    replyFn,
+    errorFn: replyFn,
+  });
+}
+
+export async function handleMentionJarvis(client: Client, message: Message): Promise<void> {
+  if (!config.jarvisMentionEnabled) return;
+  if (message.author.id !== config.ownerId) return;
+
+  const content = message.content.replace(/<@!?\d+>/g, '').trim();
+  if (!content) return;
+
+  const channel = message.channel as GuildTextBasedChannel;
+  await channel.sendTyping().catch(() => {});
+
+  const { guildId, channelId, memberList, contextBlock } = await gatherVoiceContext(client);
+  const contextPreamble = buildContextPreamble(memberList, contextBlock);
+
+  let where: string;
+  try {
+    const guild = message.guild;
+    const guildName = guild?.name ?? 'unknown server';
+    where = `Owner's message (via @mention in #${channel.name}, guild "${guildName}"): ${content}`;
+  } catch {
+    where = `Owner's message (via @mention): ${content}`;
+  }
+
+  const replyFn = async (text: string) => {
+    await message.reply(text);
+  };
+
+  await runJarvisLoop({
+    client,
+    historyKey: ownerHistoryKey(),
+    command: where,
     contextPreamble,
     guildId,
     channelId,

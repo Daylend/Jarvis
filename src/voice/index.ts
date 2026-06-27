@@ -14,6 +14,7 @@ export { registerOwnerWatch } from './owner-watch';
 export { startupAutoJoin } from './owner-watch';
 export { ttsClient } from './tts-client';
 export { handleDmJarvis } from './jarvis-handler';
+export { handleMentionJarvis } from './jarvis-handler';
 export { clearAllHistory } from './jarvis-handler';
 export { scheduler } from './scheduler';
 export { phraseTriggerRegistry } from './phrase-trigger-registry';

@@ -3,7 +3,7 @@ import { config } from './config';
 import { commands } from './commands';
 import { prisma } from './db';
 import { angryResponses } from './angry-responses';
-import { bootstrapVoice, sessionManager, handleDmJarvis } from './voice';
+import { bootstrapVoice, sessionManager, handleDmJarvis, handleMentionJarvis } from './voice';
 import { personalityStore } from './voice/personality-store';
 import { llmProviderStore } from './voice/llm-provider-store';
 
@@ -79,6 +79,17 @@ client.on(Events.MessageCreate, async message => {
 
   // @Mention Logic
   if (client.user && message.mentions.has(client.user)) {
+    // Owner @-mention → Jarvis LLM (shares conversation history with DM + voice).
+    if (message.author.id === config.ownerId && config.jarvisMentionEnabled) {
+      try {
+        await handleMentionJarvis(client, message);
+      } catch (err) {
+        console.error('[mention-jarvis] Error handling owner @mention:', err);
+        await message.reply('Something went wrong processing your message.').catch(() => {});
+      }
+      return;
+    }
+
     const rng = Math.random() * 100;
     
     if (rng < 70) {

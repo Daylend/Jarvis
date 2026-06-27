@@ -6,8 +6,8 @@ PaxFax is a multi-purpose Discord bot built with Node.js, TypeScript, and Prisma
 
 ### 1. Personality System (@Mentions)
 When the bot is mentioned in a text channel:
-- **70% Chance**: Replies with an "Angry" response (from database or fallback list).
-- **30% Chance**: Replies with a "Funny" quote (from database).
+- **Owner mention**: When the **owner** @mentions the bot, it routes through the Jarvis LLM loop (sharing conversation history with DMs and voice). Toggled by `JARVIS_MENTION_ENABLED`.
+- **Anyone else**: **70% Chance**: Replies with an "Angry" response (from database or fallback list). **30% Chance**: Replies with a "Funny" quote (from database).
 - **AI Override**: If the channel is "unlocked" via `/ai unlock`, the bot will ignore the RNG and respond with AI to all mentions.
 
 ### 2. Quote Management (`/quotes`)
@@ -77,6 +77,7 @@ The project includes a `docker-compose.yml` for local development and `docker/do
 - `src/commands/`: Slash command definitions.
 - `src/events/`: Event handlers (though currently mostly in `index.ts`).
 - `src/db.ts`: Prisma client instance.
+- `src/voice/conversation-store.ts`: Persisted conversation history (SQLite) shared across DM, voice, and @-mention entry points.
 - `src/ai-context.ts`: In-memory cache for conversation history.
 - `src/channel-lock.ts`: In-memory manager for channel unlock states.
 - `src/voice/`: Voice transcription subsystem.
@@ -125,6 +126,7 @@ AUTO_JOIN_OWNER=true
 VOICE_IDLE_TIMEOUT_SEC=900
 TRIGGER_PHRASE=jarvis
 JARVIS_CONTEXT_SECONDS=180
+JARVIS_MENTION_ENABLED=true           # Route owner @-mentions through Jarvis LLM (shared history)
 
 # LLM Backend Configuration
 LLAMA_CPP_URL=http://llama-cpp:8080/v1

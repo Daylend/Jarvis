@@ -165,6 +165,8 @@ const envSchema = z.object({
   ACK_ENABLED_DEFAULT: z.enum(['true', 'false']).default('true'),
   // Reminders / triggers
   REMINDER_TIMEZONE: z.string().default('America/New_York'),
+  // Chat @-mention → Jarvis (owner only). Kill switch.
+  JARVIS_MENTION_ENABLED: z.enum(['true', 'false']).default('true'),
 });
 const env = envSchema.parse(process.env);
 
@@ -213,4 +215,6 @@ export const config = {
   ackEnabledDefault: env.ACK_ENABLED_DEFAULT === 'true',
   // Reminders / triggers
   reminderTimezone: env.REMINDER_TIMEZONE,
+  // Chat @-mention → Jarvis (owner only). Kill switch.
+  jarvisMentionEnabled: env.JARVIS_MENTION_ENABLED === 'true',
 };

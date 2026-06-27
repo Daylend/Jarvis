@@ -68,6 +68,18 @@ model TermAlias {
   @@index([alias])
 }
 
+model ConversationMessage {
+  id         Int      @id @default(autoincrement())
+  ownerId    String
+  role       String   // user | assistant | tool (system is never persisted)
+  content    String?
+  toolCalls  String?  // JSON of tool_calls array (assistant messages)
+  toolCallId String?  // for role=tool
+  createdAt  DateTime @default(now())
+
+  @@index([ownerId, id])
+}
+
 model Skill {
   id          Int       @id @default(autoincrement())
   ownerId     String
