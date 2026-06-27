@@ -59,8 +59,8 @@ function proxyWs(req, socket, head) {
 }
 
 function pipeWs(a, b) {
-  a.on('message', (d) => b.send(d));
-  b.on('message', (d) => a.send(d));
+  a.on('message', (d, isBinary) => b.send(isBinary ? d : d.toString()));
+  b.on('message', (d, isBinary) => a.send(isBinary ? d : d.toString()));
   const close = () => { try { a.close(); } catch {} try { b.close(); } catch {} };
   a.on('close', close);
   b.on('close', close);
