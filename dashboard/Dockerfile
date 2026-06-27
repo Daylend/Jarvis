@@ -2,11 +2,13 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
+# CI builds with repo root as context; dev compose uses dashboard/ as context.
+# Copy the dashboard's own package files from the dashboard/ subdir.
+COPY dashboard/package*.json ./
 RUN npm install --legacy-peer-deps
 
-COPY . .
-
+# Copy the dashboard source and build.
+COPY dashboard/ ./
 RUN npx svelte-kit sync && npx vite build
 
 FROM node:22-alpine
