@@ -1,5 +1,4 @@
 import { quotesCommand } from './quotes';
-import { reactionsCommand } from './reactions';
 import { transcriptsCommand } from './transcripts';
 import { termsCommand } from './terms';
 import { sayCommand } from './say';
@@ -8,7 +7,6 @@ import { jarvisCommand } from './jarvis';
 
 export const commands = [
   quotesCommand,
-  reactionsCommand,
   transcriptsCommand,
   termsCommand,
   sayCommand,

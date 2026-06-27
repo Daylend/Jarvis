@@ -1,6 +1,6 @@
 # PaxFax Discord Bot
 
-PaxFax is a multi-purpose Discord bot built with Node.js, TypeScript, and Prisma (SQLite). It features a unique personality system and AI integration via OpenWebUI.
+PaxFax is a Jarvis-focused Discord bot built with Node.js, TypeScript, and Prisma (SQLite). It centers on live voice transcription, an LLM-driven assistant (Jarvis), and TTS, with a quippy quote personality for non-owner @mentions.
 
 ## Features
 
@@ -8,7 +8,6 @@ PaxFax is a multi-purpose Discord bot built with Node.js, TypeScript, and Prisma
 When the bot is mentioned in a text channel:
 - **Owner mention**: When the **owner** @mentions the bot, it routes through the Jarvis LLM loop (sharing conversation history with DMs and voice). Toggled by `JARVIS_MENTION_ENABLED`.
 - **Anyone else**: **70% Chance**: Replies with an "Angry" response (from database or fallback list). **30% Chance**: Replies with a "Funny" quote (from database).
-- **AI Override**: If the channel is "unlocked" via `/ai unlock`, the bot will ignore the RNG and respond with AI to all mentions.
 
 ### 2. Quote Management (`/quotes`)
 Manage the database of quotes used for responses.
@@ -17,34 +16,11 @@ Manage the database of quotes used for responses.
 - `/quotes list [type: <Funny|Angry>]`: List the last 20 quotes (optionally filtered).
 - `/quotes import type: <Funny|Angry> json: ["quote1", "quote2"]`: Bulk import quotes from a JSON array.
 
-### 3. AI Integration (`/ai`)
-Chat with LLMs via an OpenWebUI backend.
-- `/ai chat provider: <name> prompt: "..." [image]`: Start a new conversation.
-  - Displays user prompt and bot response in formatted embeds.
-  - Supports image attachments (multimodal).
-- **Context Awareness**: If you reply to the bot's AI response, it continues the conversation (maintaining context).
-  - **Restriction**: Only the **Owner** can continue conversations via reply, unless the channel is unlocked.
-
-### 4. AI Provider Management (`/provider`)
-Manage the AI models available to the bot.
-- `/provider add name: <alias> model: <openwebui_model_id>`: Add a provider.
-- `/provider remove name: <alias>`: Remove a provider.
-- `/provider list`: List all configured providers.
-
-### 5. Channel Locking (`/ai`)
-Control AI access in specific channels.
-- `/ai unlock provider: <name> minutes: <duration>`: Unlocks the current channel for AI interaction for a set time.
-  - Allows **anyone** to use `/ai chat` in this channel.
-  - Allows **anyone** to reply to the bot to continue conversations.
-  - Forces the bot to respond to **@mentions** with AI instead of quotes.
-- `/ai lock`: Manually re-locks the channel (reverting to Owner-only AI and standard @mention behavior).
-
 ## Setup & Deployment
 
 ### Prerequisites
 - Docker & Docker Compose
 - Discord Bot Token & Client ID
-- OpenWebUI Instance (URL & API Key)
 
 ### Environment Variables (`.env`)
 ```env
@@ -52,8 +28,6 @@ DISCORD_TOKEN=your_token
 CLIENT_ID=your_client_id
 OWNER_USER_ID=your_discord_user_id
 DATABASE_URL="file:../data/database.sqlite"
-OPENWEBUI_API_URL=http://your-openwebui:3000/api
-OPENWEBUI_API_KEY=your_api_key
 ```
 
 ### Running with Docker
@@ -78,8 +52,6 @@ The project includes a `docker-compose.yml` for local development and `docker/do
 - `src/events/`: Event handlers (though currently mostly in `index.ts`).
 - `src/db.ts`: Prisma client instance.
 - `src/voice/conversation-store.ts`: Persisted conversation history (SQLite) shared across DM, voice, and @-mention entry points.
-- `src/ai-context.ts`: In-memory cache for conversation history.
-- `src/channel-lock.ts`: In-memory manager for channel unlock states.
 - `src/voice/`: Voice transcription subsystem.
 - `services/asr/`: Python ASR sidecar with pluggable engines (Granite, Whisper).
 - `prisma/schema.prisma`: Database schema definition.
