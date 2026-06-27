@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS MIND // oscilloscope</title>
+<link rel="stylesheet" href="shared/scope.css" />
+</head>
+<body>
+<div class="scope">
+  <header class="scope__head">
+    <div class="scope__brand">JARVIS · MIND SCOPE</div>
+    <div class="scope__readout" id="status">▍ STANDBY</div>
+    <div class="scope__readout" id="clock">00:00:00</div>
+  </header>
+
+  <div class="scope__body">
+    <aside class="rail">
+      <div class="rail__group">
+        <div class="rail__label">CHANNEL · BANDS</div>
+        <div class="band" id="bandToks"><span class="band__name">TOK/S</span><span class="band__val" id="toks">0.0</span></div>
+        <div class="band" id="bandTtft"><span class="band__name">TTFT</span><span class="band__val" id="ttft">0</span></div>
+        <div class="band" id="bandIter"><span class="band__name">ITER</span><span class="band__val" id="iter">0/20</span></div>
+        <div class="band" id="bandLast"><span class="band__name">LAST</span><span class="band__val" id="last">0</span></div>
+        <div class="band" id="bandTurns"><span class="band__name">TURNS</span><span class="band__val" id="turns">0</span></div>
+      </div>
+      <div class="rail__group">
+        <div class="rail__label">CONTEXT CAPACITY</div>
+        <div class="vumeter">
+          <div class="vumeter__scale"></div>
+          <div class="vumeter__fill" id="vu"></div>
+        </div>
+        <div class="rail__label" id="ctxlabel">0 / 129024 tok</div>
+      </div>
+      <div class="rail__group">
+        <div class="rail__label">TOOL LOOP</div>
+        <div class="tools" id="tools"><span class="muted">— idle —</span></div>
+      </div>
+    </aside>
+
+    <main class="scope__main">
+      <section class="tracebox tracebox--waves">
+        <div class="tracebox__label">SIGNAL · TOKEN THROUGHPUT + TTFT</div>
+        <canvas id="wave"></canvas>
+        <div class="legend"><span class="leg leg--green">tok/s</span><span class="leg leg--amber">ttft(ms)</span></div>
+      </section>
+
+      <section class="tracebox tracebox--chat">
+        <div class="tracebox__label">CONVERSATION TRACE</div>
+        <div class="stream" id="stream"></div>
+      </section>
+
+      <section class="tracebox tracebox--think">
+        <div class="tracebox__label">EEG · INTERNAL MONOLOGUE</div>
+        <canvas id="eeg" height="56"></canvas>
+        <div class="think" id="think"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="shared/fake-mind.js"></script>
+<script src="shared/scope.js"></script>
+</body>
+</html>

@@ -3,7 +3,8 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
 import axios from 'axios';
-import { config, JARVIS_PROMPT_SCAFFOLD_HEADER, JARVIS_PROMPT_SCAFFOLD_FOOTER } from '../config';
+import { config, JARVIS_PROMPT_SCAFFOLD_HEADER, JARVIS_PROMPT_SCAFFOLD_FOOTER, JARVIS_PROMPT_SCAFFOLD_INTRO, JARVIS_PROMPT_SCAFFOLD_RULES } from '../config';
+import type { SystemPromptParts } from './mind-types';
 
 const personalitySchema = z.object({
   name: z.string().min(1),
@@ -81,6 +82,24 @@ class PersonalityStore {
     if (p.examples) parts.push(p.examples);
     parts.push(JARVIS_PROMPT_SCAFFOLD_FOOTER);
     return parts.join('\n\n');
+  }
+
+  /**
+   * Structured system-prompt parts for dashboard rendering only (the flat
+   * `getActivePrompt()` is still what the LLM sees). Returns header/rules/
+   * persona/examples/footer — notes + skills are appended by the jarvis handler
+   * at dispatch time (same data already joined flat into the prompt there).
+   */
+  getActivePromptParts(): { header: string; rules: string[]; persona: string; examples: string; footer: string } {
+    const p = this.getActive();
+    const name = p?.name || 'Jarvis';
+    return {
+      header: JARVIS_PROMPT_SCAFFOLD_INTRO.replace('{{NAME}}', name),
+      rules: [...JARVIS_PROMPT_SCAFFOLD_RULES],
+      persona: p?.persona ?? '',
+      examples: p?.examples ?? '',
+      footer: JARVIS_PROMPT_SCAFFOLD_FOOTER,
+    };
   }
 
   private load(): { loaded: number; skipped: number } {

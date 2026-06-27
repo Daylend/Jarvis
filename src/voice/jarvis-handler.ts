@@ -8,6 +8,9 @@ import { skillStore } from './skill-store';
 import { personalityStore } from './personality-store';
 import { llmProviderStore } from './llm-provider-store';
 import { conversationStore, type StoredChatMessage } from './conversation-store';
+import { mindBus } from './mind-bus';
+import { mindState } from './mind-state';
+import type { HistoryMessage, SystemPromptParts, TransientFields, TurnSource, VoiceLine } from './mind-types';
 import type { CommandHandler, JarvisPayload, SessionContext } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
@@ -20,15 +23,31 @@ const ownerLock = new Map<string, Promise<void>>();
 
 export function clearGuildHistory(_guildId: string): void {
   // History is now owner-scoped + persisted; clearing is async via the store.
-  void conversationStore.clearHistory(config.ownerId).catch((err) =>
-    console.error('[jarvis] Failed to clear persisted history:', err),
-  );
+  void conversationStore.clearHistory(config.ownerId)
+    .then(() => emitClearedContext())
+    .catch((err) => console.error('[jarvis] Failed to clear persisted history:', err));
 }
 
 export function clearAllHistory(): void {
-  void conversationStore.clearHistory(config.ownerId).catch((err) =>
-    console.error('[jarvis] Failed to clear persisted history:', err),
-  );
+  void conversationStore.clearHistory(config.ownerId)
+    .then(() => emitClearedContext())
+    .catch((err) => console.error('[jarvis] Failed to clear persisted history:', err));
+}
+
+/** After a memory wipe, emit an empty context snapshot so the dashboard reflects it. */
+async function emitClearedContext(): Promise<void> {
+  try {
+    const structuredPrompt = await buildStructuredSystemPrompt('');
+    const tokenBudget = config.llmContextLength - config.llmMaxTokens;
+    mindState.emitContext(
+      structuredPrompt,
+      [],
+      { time: formatCurrentTime(), members: [], voiceCtx: [], command: '' },
+      { used: 0, budget: tokenBudget },
+    );
+  } catch (err) {
+    console.warn('[jarvis] Failed to emit cleared mind context:', err);
+  }
 }
 
 type ChatMessage = StoredChatMessage;
@@ -128,6 +147,82 @@ function sanitizeLlmContent(raw: string | null): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
+/** Build the structured system-prompt object (notes + skills appended) for the dashboard. */
+async function buildStructuredSystemPrompt(guildId: string): Promise<SystemPromptParts> {
+  const parts = personalityStore.getActivePromptParts();
+  const notes: SystemPromptParts['notes'] = [];
+  if (guildId) {
+    try {
+      const titles = await noteStore.getTitles(guildId);
+      if (titles.length > 0) {
+        const maxNotes = 50;
+        const visible = titles.slice(0, maxNotes);
+        for (const n of visible) notes.push({ id: n.id, title: n.title });
+      }
+    } catch (err) {
+      console.warn('[jarvis] Failed to load notes for structured prompt:', err);
+    }
+  }
+  const skills: SystemPromptParts['skills'] = [];
+  try {
+    const skillRows = await skillStore.summaries(config.ownerId);
+    for (const s of skillRows as any[]) {
+      skills.push({ name: s.name, desc: s.description, active: !!s.active });
+    }
+  } catch (err) {
+    console.warn('[jarvis] Failed to load skills for structured prompt:', err);
+  }
+  return { ...parts, notes, skills };
+}
+
+/** Convert persisted StoredChatMessage[] to dashboard HistoryMessage[]. */
+function toHistoryMessages(msgs: StoredChatMessage[]): HistoryMessage[] {
+  return msgs.map((m) => {
+    const text = m.content ?? '';
+    let name: string | undefined;
+    if (m.role === 'tool' && m.tool_call_id) name = 'tool';
+    return { role: m.role, text, name };
+  });
+}
+
+/** Parse the transient user message back into structured TransientFields for the dashboard. */
+function parseTransient(userContent: string): TransientFields {
+  const timeMatch = userContent.match(/^Current time: (.+)$/m);
+  const time = timeMatch ? timeMatch[1] : '';
+  const voiceMatch = userContent.match(/\[VOICE CHANNEL\]\n([\s\S]*?)\n\n\[COMMAND\]/);
+  const commandMatch = userContent.match(/\[COMMAND\]\n([\s\S]*)$/);
+
+  const voiceCtx: VoiceLine[] = [];
+  if (voiceMatch) {
+    for (const line of voiceMatch[1].split('\n')) {
+      const m = line.match(/^\[(\d{2}:\d{2})\] (.+?): (.+)$/);
+      if (m) {
+        const owner = m[2].endsWith('(Owner)');
+        voiceCtx.push({
+          mmss: m[1],
+          name: owner ? m[2].replace(' (Owner)', '') : m[2],
+          owner,
+          text: m[3],
+        });
+      }
+    }
+  }
+  return {
+    time,
+    members: [],
+    voiceCtx,
+    command: commandMatch ? commandMatch[1] : userContent,
+  };
+}
+
+/** Derive the turn source from the command string (handlers prefix it). */
+function detectSource(command: string): TurnSource {
+  if (command.startsWith('Owner\'s message (via @mention')) return 'mention';
+  if (command.startsWith('Owner\'s message (via DM')) return 'dm';
+  if (command.startsWith('[PHRASE TRIGGER') || command.startsWith('[TIME REMINDER') || command.startsWith('[SKILL AUTOSTART')) return 'trigger';
+  return 'voice';
+}
+
 async function requestApproval(
   client: Client,
   ownerId: string,
@@ -197,6 +292,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       console.error('[jarvis] Failed to load persisted history (continuing empty):', err);
     }
 
+    const structuredPrompt = await buildStructuredSystemPrompt(guildId);
+
     let systemPrompt = personalityStore.getActivePrompt();
     if (guildId) {
       try {
@@ -241,7 +338,9 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     };
     while (history.length > 0 && estimateCurrentSize() > tokenBudget) {
       history.shift();
-      console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${estimateCurrentSize()} tokens, budget ${tokenBudget})`);
+      const used = estimateCurrentSize();
+      console.log(`[jarvis] Trimmed oldest history message to fit context budget (est. ${used} tokens, budget ${tokenBudget})`);
+      mindBus.emit('llm:trim', { used, budget: tokenBudget });
     }
 
     const messages: ChatMessage[] = [
@@ -261,7 +360,31 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     const historyStart = messages.length;
     messages.push({ role: 'user', content: userContent });
 
+    // ── mind-bus: emit context snapshot + capture an inference slice ──
+    const turnSource = detectSource(command);
+    const usedTokens = estimateCurrentSize();
+    const transient = parseTransient(userContent);
+    mindState.beginTurn();
+    mindState.updateContext({ used: usedTokens, budget: tokenBudget });
+    mindState.emitContext(
+      structuredPrompt,
+      toHistoryMessages(history),
+      transient,
+      { used: usedTokens, budget: tokenBudget },
+      { captureSlice: true, command },
+    );
+
     console.log(`[jarvis] Dispatching to LLM (key=${historyKey} backend=${llmProviderStore.getBackend()} model=${llmProviderStore.getModel()}) — prompt: "${command.slice(0, 120)}..."`);
+
+    mindBus.emit('llm:dispatch', {
+      key: historyKey,
+      prompt: command.slice(0, 200),
+      source: turnSource,
+      backend: llmProviderStore.getBackend(),
+      model: llmProviderStore.getModel(),
+    });
+    // Mark the dashboard session active for this turn (status pill).
+    mindState.setSession(true, guildId, channelId);
 
     let finalText: string | null = null;
     let toolDelivered = false;
@@ -270,6 +393,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     for (let iter = 0; iter < config.llmMaxToolLoop; iter++) {
       iterCount = iter + 1;
       console.log(`[jarvis] LLM call iteration ${iterCount}/${config.llmMaxToolLoop}`);
+      mindState.updateStats({ iter: iterCount });
+      mindBus.emit('llm:iter', { key: historyKey, iter: iterCount, max: config.llmMaxToolLoop });
 
       try {
         const { url, headers, body } = llmProviderStore.buildRequest(messages, toolRegistry.getAllDefinitions());
@@ -298,6 +423,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
 
             const tool = toolRegistry.get(toolName);
             if (!tool) {
+              mindBus.emit('llm:tool_request', { key: historyKey, name: toolName, args: {}, requiresApproval: false });
+              mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: `Tool "${toolName}" not found`, ok: false });
               messages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
@@ -310,6 +437,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             try {
               args = JSON.parse(tc.function.arguments);
             } catch {
+              mindBus.emit('llm:tool_request', { key: historyKey, name: toolName, args: {}, requiresApproval: false });
+              mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: 'Failed to parse tool arguments', ok: false });
               messages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
@@ -318,7 +447,11 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
               continue;
             }
 
-            if (tool.requiresApproval) {
+            const requiresApproval = !!tool.requiresApproval;
+            mindBus.emit('llm:tool_request', { key: historyKey, name: toolName, args, requiresApproval });
+            mindState.patchSlice({ hadTool: true, tool: { name: toolName, args, requiresApproval, result: null } });
+
+            if (requiresApproval) {
               const approved = await requestApproval(
                 client,
                 config.ownerId,
@@ -326,6 +459,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                 args,
               );
               if (!approved) {
+                mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: 'Tool call denied by user', ok: false });
+                mindState.patchSlice({ tool: { name: toolName, args, requiresApproval, result: 'denied by user' } });
                 messages.push({
                   role: 'tool',
                   tool_call_id: tc.id,
@@ -349,6 +484,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                 },
               });
               if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
+              mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: result.slice(0, 2000), ok: true });
+              mindState.patchSlice({ tool: { name: toolName, args, requiresApproval, result: result.slice(0, 2000) } });
               messages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
@@ -357,6 +494,8 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
             } catch (err) {
               const errorMsg = (err as Error).message;
               console.error(`[jarvis] Tool "${toolName}" execution error:`, errorMsg);
+              mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: `Tool error: ${errorMsg}`, ok: false });
+              mindState.patchSlice({ tool: { name: toolName, args, requiresApproval, result: `Tool error: ${errorMsg}` } });
               messages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
@@ -375,6 +514,9 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
         if (sanitizedContent) {
           messages.push(assistantMsg);
           finalText = sanitizedContent;
+          // Non-streaming (Phase 1): no token deltas. Emit a single ttft ≈ total
+          // generation time and the whole reply as one final. Phase 2 replaces
+          // this with real streaming llm:token/llm:ttft/llm:think deltas.
           break;
         }
 
@@ -405,9 +547,21 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     }
 
     const elapsed = Math.round(performance.now() - t0);
+    mindState.updateStats({ lastElapsed: elapsed, iter: iterCount });
 
     if (finalText && !toolDelivered) {
       console.log(`[jarvis] Response in ${elapsed}ms: "${finalText.slice(0, 120)}${finalText.length > 120 ? '...' : ''}"`);
+      const tokensOut = Math.max(1, Math.round(finalText.length / 4));
+      const tokensIn = Math.max(1, Math.round(usedTokens));
+      const tokPerSec = elapsed > 0 ? Math.round((tokensOut / elapsed) * 1000) : 0;
+      mindState.updateStats({ tokPerSec, ttft: elapsed });
+      // Non-streaming (Phase 1): emit the whole reply as a single token delta so
+      // the generating tail renders, then finalize. Phase 2 replaces this with a
+      // real streamed token sequence.
+      mindBus.emit('llm:ttft', { key: historyKey, ms: elapsed });
+      mindBus.emit('llm:token', { key: historyKey, text: finalText });
+      mindBus.emit('llm:final', { key: historyKey, text: finalText, tokensIn, tokensOut, tokPerSec, elapsedMs: elapsed });
+      mindState.patchSlice({ reply: finalText, status: 'done', stats: { ...mindState.stats } });
       try {
         const chunks = splitChunks(finalText);
         for (const chunk of chunks) {
@@ -419,8 +573,10 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       }
     } else if (toolDelivered) {
       console.log(`[jarvis] Tool already delivered response (${elapsed}ms)`);
+      mindState.patchSlice({ reply: null, status: 'done', stats: { ...mindState.stats } });
     } else {
       console.warn(`[jarvis] No final response after ${iterCount} iterations (${elapsed}ms)`);
+      mindState.patchSlice({ reply: null, status: 'done', stats: { ...mindState.stats } });
 
       if (!suppressEmptyFallback && messages.length > 0) {
         const lastContent = messages
@@ -438,6 +594,20 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
         console.log('[jarvis] Empty fallback suppressed (trigger silence)');
       }
     }
+
+    // ── mind-bus: re-emit context reflecting the now-persisted history ──
+    mindState.setSession(false, guildId, channelId);
+    try {
+      const refreshedHistory = await conversationStore.loadHistory(config.ownerId);
+      mindState.emitContext(
+        structuredPrompt,
+        toHistoryMessages(refreshedHistory),
+        transient,
+        { used: estimateCurrentSize(), budget: tokenBudget },
+      );
+    } catch (err) {
+      console.warn('[jarvis] Failed to re-emit mind context post-turn:', err);
+    }
   } finally {
     releaseLock!();
     // Release the ack hold for this guild (no-op if no ack session / not in voice).
@@ -445,6 +615,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       try {
         const { ttsClient } = await import('./tts-client');
         ttsClient.endAck(guildId);
+        mindBus.emit('ack:state', { guild: guildId, active: false });
       } catch (err) {
         console.warn('[jarvis] Failed to release ack:', (err as Error).message);
       }

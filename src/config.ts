@@ -71,18 +71,27 @@ dotenv.config();
  * If you need to add rules, remove one first. If responses degrade, the
  * prompt is probably too long or too complex — simplify, don't append.
  */
+/** Prompt scaffold: intro line. {{NAME}} is replaced with the personality name. */
+export const JARVIS_PROMPT_SCAFFOLD_INTRO =
+`You are {{NAME}}, an AI assistant in a Discord voice channel. You listen to live conversation. Only the owner gives you commands — everyone else is context.`;
+
+/** Prompt scaffold: the behavioral rules, as an ordered array (one per rule). */
+export const JARVIS_PROMPT_SCAFFOLD_RULES: string[] = [
+  'Have your own take. Never summarize or restate what people said. When asked for thoughts, give a verdict, disagree, or add something nobody mentioned.',
+  'Match length to the moment. Casual question, casual answer. If one sentence is enough, stop there. Default to shorter.',
+  'Reply by calling the speak_tts tool with your spoken words as the text argument. The argument is your whole reply — plain spoken words, no markdown, no function syntax, no quotes around the call. Call send_dm instead for anything long, structured, or private.',
+  '"Cancel that" → reply "Request canceled" via send_dm.',
+  'Past conversations: search_transcripts to find hits, then get_transcripts with around_id to expand context. Start with limit 5-10, expand to 30 if needed.',
+  'clear_memory when asked to forget or reset.',
+  '"Remember X" → save_note with a short title and full content. Your notes are listed below — use search_notes with the id to read full content, or search by keyword.',
+];
+
 /** Prompt scaffold header: intro + RULES. {{NAME}} is replaced with the personality name. */
 export const JARVIS_PROMPT_SCAFFOLD_HEADER =
-`You are {{NAME}}, an AI assistant in a Discord voice channel. You listen to live conversation. Only the owner gives you commands — everyone else is context.
+`${JARVIS_PROMPT_SCAFFOLD_INTRO}
 
 RULES:
-1. Have your own take. Never summarize or restate what people said. When asked for thoughts, give a verdict, disagree, or add something nobody mentioned.
-2. Match length to the moment. Casual question, casual answer. If one sentence is enough, stop there. Default to shorter.
-3. Reply by calling the speak_tts tool with your spoken words as the text argument. The argument is your whole reply — plain spoken words, no markdown, no function syntax, no quotes around the call. Call send_dm instead for anything long, structured, or private.
-4. "Cancel that" → reply "Request canceled" via send_dm.
-5. Past conversations: search_transcripts to find hits, then get_transcripts with around_id to expand context. Start with limit 5-10, expand to 30 if needed.
-6. clear_memory when asked to forget or reset.
-7. "Remember X" → save_note with a short title and full content. Your notes are listed below — use search_notes with the id to read full content, or search by keyword.`;
+${JARVIS_PROMPT_SCAFFOLD_RULES.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
 
 /** Prompt scaffold footer: closing context line. */
 export const JARVIS_PROMPT_SCAFFOLD_FOOTER =
@@ -167,6 +176,10 @@ const envSchema = z.object({
   REMINDER_TIMEZONE: z.string().default('America/New_York'),
   // Chat @-mention → Jarvis (owner only). Kill switch.
   JARVIS_MENTION_ENABLED: z.enum(['true', 'false']).default('true'),
+  // Mind dashboard (in-process WS + HTTP, owner-only via reverse proxy).
+  DASHBOARD_ENABLED: z.enum(['true', 'false']).default('false'),
+  DASHBOARD_WS_PORT: z.coerce.number().int().min(1).default(7780),
+  DASHBOARD_HTTP_PORT: z.coerce.number().int().min(1).default(7781),
 });
 const env = envSchema.parse(process.env);
 
@@ -217,4 +230,8 @@ export const config = {
   reminderTimezone: env.REMINDER_TIMEZONE,
   // Chat @-mention → Jarvis (owner only). Kill switch.
   jarvisMentionEnabled: env.JARVIS_MENTION_ENABLED === 'true',
+  // Mind dashboard
+  dashboardEnabled: env.DASHBOARD_ENABLED === 'true',
+  dashboardWsPort: env.DASHBOARD_WS_PORT,
+  dashboardHttpPort: env.DASHBOARD_HTTP_PORT,
 };

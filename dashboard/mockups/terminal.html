@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS MIND // terminal</title>
+<link rel="stylesheet" href="shared/terminal.css" />
+</head>
+<body>
+<div class="crt">
+  <div class="crt__screen">
+    <header class="bar">
+      <span class="bar__title">JARVIS::MIND</span>
+      <span class="bar__status" id="status">● IDLE</span>
+      <span class="bar__meta" id="meta">backend=local model=gemma-4-26b-a4b-it</span>
+      <span class="bar__clock" id="clock">--:--:--</span>
+    </header>
+
+    <main class="grid">
+      <section class="panel panel--main">
+        <div class="panel__head">CONVERSATION STREAM</div>
+        <div class="stream" id="stream"></div>
+      </section>
+
+      <aside class="panel panel--think">
+        <div class="panel__head">TRACE / THINKING</div>
+        <div class="trace" id="trace"></div>
+      </aside>
+
+      <section class="panel panel--telemetry">
+        <div class="panel__head">TELEMETRY</div>
+        <div class="telemetry">
+          <div class="tele"><span>TOK/S</span><b id="toks">0.0</b></div>
+          <div class="tele"><span>TTFT</span><b id="ttft">0 ms</b></div>
+          <div class="tele"><span>ITER</span><b id="iter">0/20</b></div>
+          <div class="tele"><span>LAST</span><b id="last">0 ms</b></div>
+          <div class="tele"><span>TURNS</span><b id="turns">0</b></div>
+        </div>
+        <div class="spark"><canvas id="spark" height="42"></canvas></div>
+        <div class="panel__head">CONTEXT FILL</div>
+        <div class="gauge"><div class="gauge__fill" id="gauge"></div></div>
+        <div class="gauge__label" id="ctxlabel">0 / 129024 tok</div>
+        <div class="panel__head">TOOL LOOP</div>
+        <div class="tools" id="tools"><span class="muted">— none —</span></div>
+      </section>
+    </main>
+
+    <footer class="bar bar--foot">
+      <span class="bar__title">SESSION</span>
+      <span class="bar__meta" id="sess">voice :: paxfax / General</span>
+      <span class="bar__meta muted">Ctrl+L clear · ▮</span>
+    </footer>
+  </div>
+</div>
+
+<script src="shared/fake-mind.js"></script>
+<script src="shared/terminal.js"></script>
+</body>
+</html>

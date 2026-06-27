@@ -39,6 +39,28 @@ class ActionRouter {
     this.client = client;
   }
 
+  /** Resolve a voice-channel speaker's display name + owner flag + avatar URL. */
+  resolveSpeaker(guildId: string, userId: string): { name: string; owner: boolean; avatarUrl?: string } {
+    const owner = userId === config.ownerId;
+    if (!this.client) return { name: owner ? 'You (Owner)' : `<@${userId}>`, owner };
+    try {
+      const guild = this.client.guilds.cache.get(guildId);
+      const member = guild?.members.cache.get(userId);
+      if (member) {
+        return {
+          name: owner ? `${member.displayName} (Owner)` : member.displayName,
+          owner,
+          avatarUrl: member.user.displayAvatarURL({ size: 64 }),
+        };
+      }
+      const user = this.client.users.cache.get(userId);
+      if (user) {
+        return { name: owner ? `${user.username} (Owner)` : user.username, owner, avatarUrl: user.displayAvatarURL({ size: 64 }) };
+      }
+    } catch { /* ignore */ }
+    return { name: owner ? 'You (Owner)' : `<@${userId}>`, owner };
+  }
+
   private handler: CommandHandler = async (p) => {
     console.log(`[jarvis] command: "${p.command}"`);
     console.log(`[jarvis] context window (${config.jarvisContextSeconds}s):\n${p.contextBlock || '(empty)'}`);
@@ -70,6 +92,13 @@ class ActionRouter {
       if (!ack.ackEnabled || !ack.soundPath) return;
       const { ttsClient } = require('./tts-client');
       ttsClient.beginAck(ctx.connection, ack.soundPath, ctx.guildId);
+      // Notify the mind-dashboard that Jarvis is now "thinking" (ack held).
+      try {
+        const { mindBus } = require('./mind-bus');
+        const { mindState } = require('./mind-state');
+        mindState.setSession(true, ctx.guildId, ctx.channelId);
+        mindBus.emit('ack:state', { guild: ctx.guildId, active: true });
+      } catch { /* dashboard optional */ }
     } catch (err) {
       console.warn('[jarvis] Failed to trigger ack:', (err as Error).message);
     }

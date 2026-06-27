@@ -34,6 +34,17 @@ client.once(Events.ClientReady, async (c) => {
     console.error('[startup] personalityStore.init failed:', err);
   });
   llmProviderStore.init();
+
+  if (config.dashboardEnabled) {
+    try {
+      const { startMindTick } = await import('./voice/mind-tick');
+      const { startWsServer } = await import('./dashboard/ws-server');
+      startMindTick();
+      startWsServer();
+    } catch (err) {
+      console.error('[startup] dashboard WS failed:', err);
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async interaction => {

@@ -458,6 +458,25 @@ class AsrClient {
       console.error(`[asr-client] transcriptStore.save FAILED:`, err);
     }
 
+    // Emit transcript:final for the mind-dashboard live [VOICE CHANNEL] block.
+    try {
+      const { mindBus } = await import('./mind-bus');
+      const { mindState } = await import('./mind-state');
+      const sp = actionRouter.resolveSpeaker(state.ctx.guildId, userId);
+      const now = new Date();
+      const mmss = `${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      mindState.pushVoice({ mmss, name: sp.name, owner: sp.owner, text: textNormalized, avatarUrl: sp.avatarUrl });
+      mindBus.emit('transcript:final', {
+        speaker: sp.name,
+        owner: sp.owner,
+        text: textNormalized,
+        startMs: msg.startMs ?? Date.now(),
+        avatarUrl: sp.avatarUrl,
+      });
+    } catch (err) {
+      console.warn('[asr-client] mind-bus transcript emit failed:', (err as Error).message);
+    }
+
     await actionRouter.onFinal(state.ctx, {
       ...msg,
       textNormalized,

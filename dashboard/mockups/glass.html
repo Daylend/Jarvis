@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS MIND // glass</title>
+<link rel="stylesheet" href="shared/glass.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand__dot"></span> JARVIS <em>MIND</em></div>
+    <div class="topbar__sub">context observatory · live</div>
+    <div class="topbar__right">
+      <span class="statuspill" id="status"><span class="led"></span> IDLE</span>
+      <span class="clock" id="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- telemetry: bigger gauges, full width, legible -->
+    <section class="card card--telemetry">
+      <div class="gauges-row">
+        <div class="gauge">
+          <canvas class="ring" id="ringToks" width="72" height="72"></canvas>
+          <div class="gauge__val"><b id="toks">0.0</b><span>tok/s</span></div>
+        </div>
+        <div class="gauge">
+          <canvas class="ring" id="ringCtx" width="72" height="72"></canvas>
+          <div class="gauge__val"><b id="ctxpct">0%</b><span id="ctxabs">0/129k</span></div>
+        </div>
+        <div class="ctxbar"><div class="ctxbar__fill" id="ctxFill"></div><span class="ctxbar__lbl">CONTEXT FILL</span></div>
+        <div class="stat-tile"><span class="stat-tile__k">TTFT</span><b id="ttft">0</b><span>ms</span></div>
+        <div class="stat-tile"><span class="stat-tile__k">ITER</span><b id="iter">0</b><span>/20</span></div>
+        <div class="stat-tile"><span class="stat-tile__k">LAST</span><b id="last">0</b><span>ms</span></div>
+        <div class="stat-tile"><span class="stat-tile__k">TURNS</span><b id="turns">0</b></div>
+      </div>
+    </section>
+
+    <!-- inference timeline scrubber -->
+    <section class="card card--timeline">
+      <div class="pane__head">
+        <span>INFERENCE TIMELINE</span>
+        <span class="pane__sub" id="tlCount">0 slices</span>
+        <button class="tl-live" id="tlLive">● LIVE</button>
+      </div>
+      <div class="timeline" id="timeline">
+        <div class="tl-empty muted">no inferences yet</div>
+      </div>
+      <div class="tl-detail" id="tlDetail" hidden>
+        <div class="tl-detail__cmd" id="tlCmd"></div>
+        <div class="tl-detail__meta">
+          <span id="tlToks"></span><span id="tlElapsed"></span><span id="tlStatus"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- THE MIND: one mega feed = the context array, ordered -->
+    <section class="card card--feed">
+      <div class="pane__head">CONTEXT WINDOW <span class="pane__sub" id="ctxmeta">what jarvis sees · live</span></div>
+      <div class="feed" id="feed">
+
+        <!-- [0] system prompt: collapsible, collapsed by default -->
+        <div class="ctx-sec" id="sysSec">
+          <button class="ctx-sec__head" id="sysToggle">
+            <span class="ctx-sec__idx">[0]</span>
+            <span class="ctx-sec__title">SYSTEM PROMPT</span>
+            <span class="ctx-sec__badge kept">rebuilt each turn</span>
+            <span class="ctx-sec__chev">▸</span>
+          </button>
+          <div class="ctx-sec__body" id="sysBody" hidden>
+            <div class="syspart">
+              <div class="syspart__label">scaffold header</div>
+              <div class="syspart__txt" id="sysHeader"></div>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">rules</div>
+              <ol class="rules" id="sysRules"></ol>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">persona <span class="tag tag--yaml">jarvis.yaml</span></div>
+              <div class="syspart__txt" id="sysPersona"></div>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">examples <span class="tag tag--yaml">jarvis.yaml</span></div>
+              <pre class="syspart__pre" id="sysExamples"></pre>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">injected · your notes <span class="tag tag--inj">noteStore</span></div>
+              <ul class="injlist" id="sysNotes"></ul>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">injected · your skills <span class="tag tag--inj">skillStore</span></div>
+              <ul class="injlist" id="sysSkills"></ul>
+            </div>
+            <div class="syspart">
+              <div class="syspart__label">scaffold footer</div>
+              <div class="syspart__txt" id="sysFooter"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- [1..n] persisted history: collapsible, open by default -->
+        <div class="ctx-sec" id="histSec">
+          <button class="ctx-sec__head" id="histToggle">
+            <span class="ctx-sec__idx" id="histIdx">[1..0]</span>
+            <span class="ctx-sec__title">PERSISTED HISTORY</span>
+            <span class="ctx-sec__badge kept" id="histBadge">kept · 0 msgs</span>
+            <span class="ctx-sec__chev">▸</span>
+          </button>
+          <div class="ctx-sec__body ctx-sec__body--open" id="histBody">
+            <div class="hist" id="hist"></div>
+          </div>
+        </div>
+
+        <!-- [n+1] transient · this turn: collapsible, open, expands to fill -->
+        <div class="ctx-sec ctx-sec--fill" id="transSec">
+          <button class="ctx-sec__head" id="transToggle">
+            <span class="ctx-sec__idx" id="transIdx">[n+1]</span>
+            <span class="ctx-sec__title">TRANSIENT · THIS TURN</span>
+            <span class="ctx-sec__badge ephem">ephemeral · not kept</span>
+            <span class="ctx-sec__chev">▸</span>
+          </button>
+          <div class="ctx-sec__body ctx-sec__body--open" id="transBody">
+            <div class="trans" id="trans"></div>
+          </div>
+        </div>
+
+        <!-- generating: the in-flight reply that will persist on completion -->
+        <div class="ctx-sec open" id="genSec">
+          <div class="ctx-sec__head ctx-sec__head--static">
+            <span class="ctx-sec__idx">→</span>
+            <span class="ctx-sec__title">GENERATING</span>
+            <span class="ctx-sec__badge" id="genBadge">in-flight · will persist on completion</span>
+          </div>
+          <div class="ctx-sec__body ctx-sec__body--open">
+            <div class="gen">
+              <div class="gen__think" id="genThink"><span class="muted">— idle · no active generation —</span></div>
+              <div class="gen__tools" id="genTools"></div>
+              <div class="gen__reply" id="genReply"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="shared/fake-mind.js"></script>
+<script src="shared/glass.js"></script>
+</body>
+</html>

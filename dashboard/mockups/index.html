@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis Mind Dashboard — Mockups</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(120% 120% at 50% 0%, #0c1424, #060b14 60%);
+    color: #cfe2f3; font-family: "Inter", system-ui, sans-serif; padding: 24px;
+  }
+  .wrap { max-width: 980px; width: 100%; }
+  h1 { font-size: 28px; font-weight: 800; letter-spacing: .02em; margin-bottom: 4px; }
+  h1 em { color: #f0a040; font-style: normal; }
+  .sub { color: #6b829a; margin-bottom: 28px; font-size: 14px; line-height: 1.6; }
+  .sub code { background: rgba(86,180,233,.1); padding: 1px 6px; border-radius: 4px; color: #56b4e9; font-family: "JetBrains Mono", monospace; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .card {
+    display: block; text-decoration: none; color: inherit;
+    border: 1px solid rgba(86,180,233,.2); border-radius: 10px;
+    background: linear-gradient(180deg, #0c1424, #0a1120);
+    overflow: hidden; transition: transform .15s ease, border-color .15s ease;
+  }
+  .card:hover { transform: translateY(-3px); border-color: #56b4e9; }
+  .card__thumb { height: 150px; display: flex; align-items: center; justify-content: center; font-family: "JetBrains Mono", monospace; font-size: 12px; position: relative; overflow: hidden; }
+  .thumb--terminal { background: #0a0a05; color: #ffb000; }
+  .thumb--hud { background: #060b14; color: #56b4e9; }
+  .thumb--scope { background: #020805; color: #39ff8a; }
+  .thumb--glass { background: linear-gradient(135deg, #070912, #0c1220); color: #5cc8ff; border-bottom: 1px solid rgba(120,160,220,.18); }
+  .thumb--glass::before { content:""; position:absolute; inset:0; background-image: linear-gradient(rgba(92,200,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(92,200,255,.06) 1px, transparent 1px); background-size: 18px 18px; }
+  .thumb--glass::after { content:""; position:absolute; left:0; right:0; top:0; height:1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.25), transparent); }
+  .card--feat { border-color: rgba(92,200,255,.4); box-shadow: 0 0 0 1px rgba(92,200,255,.12); }
+  .tag-new { font-size: 10px; padding: 2px 7px; border-radius: 6px; background: rgba(92,200,255,.15); color: #5cc8ff; font-weight: 600; vertical-align: 2px; margin-left: 6px; letter-spacing: .03em; }
+  .thumb__label { position: relative; z-index: 2; letter-spacing: .15em; font-weight: 700; }
+  .thumb--terminal::after { content:""; position:absolute; inset:0; background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(0,0,0,.25) 3px, transparent 4px); }
+  .thumb--hud::before { content:""; position:absolute; inset:0; background-image: linear-gradient(rgba(86,180,233,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(86,180,233,.08) 1px, transparent 1px); background-size: 22px 22px; }
+  .thumb--scope::after { content:""; position:absolute; inset:0; background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(0,0,0,.3) 3px, transparent 4px); }
+  .card__body { padding: 14px 16px; }
+  .card__name { font-weight: 700; font-size: 16px; margin-bottom: 4px; }
+  .card__name .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  .thumb--terminal ~ .card__body .card__name .dot { background: #ffb000; }
+  .thumb--hud ~ .card__body .card__name .dot { background: #56b4e9; }
+  .thumb--scope ~ .card__body .card__name .dot { background: #39ff8a; }
+  .thumb--glass ~ .card__body .card__name .dot { background: #5cc8ff; }
+  .card__desc { color: #8298b3; font-size: 13px; line-height: 1.5; }
+  .card__tags { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 8px; background: rgba(86,180,233,.1); color: #6b829a; }
+  .note { margin-top: 28px; padding: 14px 16px; border: 1px dashed rgba(86,180,233,.2); border-radius: 8px; color: #8298b3; font-size: 13px; line-height: 1.6; }
+  .note b { color: #cfe2f3; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Jarvis <em>Mind Dashboard</em> — Phase A Mockups</h1>
+  <p class="sub">
+    Three candidate themes for the live "peer inside the mind" view. Each runs the same
+    scripted scenario (ambient voice chatter → wake word → thinking trace → tool call →
+    streamed reply) so you can compare <b>feel</b>, not content. Click through, watch a
+    few turns, then pick a direction (or a hybrid). Data is fake — wired to
+    <code>shared/fake-mind.js</code>.
+  </p>
+
+  <div class="grid">
+    <a class="card card--feat" href="glass.html">
+      <div class="card__thumb thumb--glass"><span class="thumb__label">CONTEXT WINDOW</span></div>
+      <div class="card__body">
+        <div class="card__name"><span class="dot dot--glass"></span>Glass / Context Observatory <span class="tag-new">RECOMMENDED · your feedback</span></div>
+        <div class="card__desc">Black + frosted glass. Tall chat on the left, tiled gauges + a structured <b>Context Window</b> on the right showing exactly what Jarvis sees: system prompt (collapsible), persisted history, and the ephemeral transient block. Discord avatars.</div>
+        <div class="card__tags"><span class="tag">glass</span><span class="tag">structured context</span><span class="tag">avatars</span></div>
+      </div>
+    </a>
+
+    <a class="card" href="terminal.html">
+      <div class="card__thumb thumb--terminal"><span class="thumb__label">▍ JARVIS::MIND</span></div>
+      <div class="card__body">
+        <div class="card__name"><span class="dot"></span>Terminal / Phosphor CRT</div>
+        <div class="card__desc">Monospace, amber phosphor, scanlines, blinking cursor, ASCII panels. Maximal hacker vibe; best raw legibility for logs and transcripts.</div>
+        <div class="card__tags"><span class="tag">monospace</span><span class="tag">scanlines</span><span class="tag">dense</span></div>
+      </div>
+    </a>
+
+    <a class="card" href="hud.html">
+      <div class="card__thumb thumb--hud"><span class="thumb__label">MISSION CONTROL</span></div>
+      <div class="card__body">
+        <div class="card__name"><span class="dot"></span>Mission Control HUD</div>
+        <div class="card__desc">Dark navy, cyan + amber telemetry, ring gauges for tok/s and context fill, modular panels. Best fit for live stats and monitoring.</div>
+        <div class="card__tags"><span class="tag">gauges</span><span class="tag">panels</span><span class="tag">polished</span></div>
+      </div>
+    </a>
+
+    <a class="card" href="scope.html">
+      <div class="card__thumb thumb--scope"><span class="thumb__label">▓ MIND SCOPE</span></div>
+      <div class="card__body">
+        <div class="card__name"><span class="dot"></span>Oscilloscope / Lab Instrument</div>
+        <div class="card__desc">Phosphor-green traces on black, live waveforms for token throughput + TTFT, an EEG-style internal-monologue trace. Strongest "mind" metaphor.</div>
+        <div class="card__tags"><span class="tag">waveforms</span><span class="tag">eeg</span><span class="tag">atmospheric</span></div>
+      </div>
+    </a>
+  </div>
+
+  <div class="note">
+    <b>How to view:</b> these are dependency-free static files — just open <code>dashboard/mockups/index.html</code>
+    directly in a browser, or serve the folder with any static server (e.g. <code>python -m http.server</code>
+    from inside <code>dashboard/mockups/</code>). The real Phase D frontend will be SvelteKit as decided.
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS MIND // mission control</title>
+<link rel="stylesheet" href="shared/hud.css" />
+</head>
+<body>
+<div class="hud">
+  <header class="hud__top">
+    <div class="hud__brand"><span class="dot"></span> JARVIS <em>MIND</em></div>
+    <div class="hud__title">MISSION CONTROL — LIVE</div>
+    <div class="hud__clock" id="clock">--:--:--</div>
+  </header>
+
+  <div class="hud__row hud__row--gauges">
+    <div class="card card--gauge">
+      <div class="card__label">TOKENS / SEC</div>
+      <div class="gauge-ring" id="ringToks"><canvas width="120" height="120"></canvas>
+        <div class="gauge-ring__val"><b id="toks">0.0</b><span>tok/s</span></div>
+      </div>
+    </div>
+    <div class="card card--gauge">
+      <div class="card__label">CONTEXT FILL</div>
+      <div class="gauge-ring" id="ringCtx"><canvas width="120" height="120"></canvas>
+        <div class="gauge-ring__val"><b id="ctxpct">0%</b><span id="ctxabs">0 / 129k</span></div>
+      </div>
+    </div>
+    <div class="card card--stat">
+      <div class="card__label">TTFT</div>
+      <div class="bigstat" id="ttft">0<span>ms</span></div>
+      <div class="spark"><canvas id="sparkTtft" height="34"></canvas></div>
+    </div>
+    <div class="card card--stat">
+      <div class="card__label">LAST TURN</div>
+      <div class="bigstat" id="last">0<span>ms</span></div>
+      <div class="substat" id="turns">0 turns</div>
+    </div>
+    <div class="card card--stat">
+      <div class="card__label">TOOL LOOP</div>
+      <div class="bigstat" id="iter">0<span>/20</span></div>
+      <div class="substat" id="backend">local · gemma-4-26b</div>
+    </div>
+    <div class="card card--status" id="statusCard">
+      <div class="card__label">STATUS</div>
+      <div class="statuspill" id="status"><span class="led"></span> IDLE</div>
+      <div class="substat" id="sess">voice · paxfax / General</div>
+    </div>
+  </div>
+
+  <div class="hud__row hud__row--main">
+    <section class="card card--stream">
+      <div class="card__label card__label--head">CONVERSATION TRANSCRIPT</div>
+      <div class="stream" id="stream"></div>
+    </section>
+    <section class="card card--side">
+      <div class="card__label card__label--head">AI PROCESS</div>
+      <div class="thinkwrap">
+        <div class="card__sublabel">THINKING TRACE</div>
+        <div class="trace" id="trace"></div>
+      </div>
+      <div class="toolwrap">
+        <div class="card__sublabel">TOOL CALLS</div>
+        <div class="tools" id="tools"><span class="muted">no active calls</span></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="shared/fake-mind.js"></script>
+<script src="shared/hud.js"></script>
+</body>
+</html>
