@@ -6,7 +6,7 @@
 
   let { children } = $props();
 
-  let clock = '';
+  let clock = $state('');
 
   function tick() {
     clock = new Date().toTimeString().slice(0, 8);

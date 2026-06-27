@@ -1,5 +1,7 @@
 // Thin fetch client for the dashboard HTTP API. All calls return JSON.
-const BASE = (import.meta as any).env?.PUBLIC_DASHBOARD_HTTP_URL || '';
+import { env } from '$env/dynamic/public';
+
+const BASE = env.PUBLIC_DASHBOARD_HTTP_URL || '';
 
 function url(path: string): string {
   return BASE ? `${BASE}${path}` : path;

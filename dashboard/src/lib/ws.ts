@@ -1,9 +1,9 @@
 // WebSocket client: connects to the bot's in-process mind-bus WS server and
 // dispatches events into the Svelte store. Reconnects with backoff.
-import { PUBLIC_DASHBOARD_WS_URL } from '$env/static/public';
+import { env } from '$env/dynamic/public';
 import { applyEvent } from './mindStore';
 
-const WS_URL = PUBLIC_DASHBOARD_WS_URL || `ws://${window.location.hostname}:7780`;
+const WS_URL = env.PUBLIC_DASHBOARD_WS_URL || `ws://${window.location.hostname}:7780`;
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
