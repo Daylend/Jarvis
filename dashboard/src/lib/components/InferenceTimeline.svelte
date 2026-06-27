@@ -17,8 +17,8 @@
     sendSelectSlice(id);
   }
 
-  $: if (browser) autoScroll(slices.length);
-  function autoScroll(_n: number) {
+  $: if (browser) autoScroll(slices);
+  function autoScroll(_s: typeof slices) {
     requestAnimationFrame(() => {
       const el = document.getElementById('timeline');
       if (el) el.scrollLeft = el.scrollWidth;

@@ -1,9 +1,26 @@
 <script lang="ts">
-  import { esc } from '$lib/util';
+  import { browser } from '$app/environment';
   import type { HistoryMessage } from '$lib/types';
 
   export let history: HistoryMessage[];
   let open = true;
+
+  let histEl: HTMLElement;
+  let stick = true;
+
+  function onScroll() {
+    if (!histEl) return;
+    stick = histEl.scrollTop + histEl.clientHeight + 24 >= histEl.scrollHeight;
+  }
+
+  $: if (browser && histEl && history.length) scrollToBottom(history);
+  function scrollToBottom(_h: HistoryMessage[]) {
+    if (!stick) return;
+    requestAnimationFrame(() => {
+      if (!histEl) return;
+      histEl.scrollTop = histEl.scrollHeight;
+    });
+  }
 </script>
 
 <div class="ctx-sec" class:open={open}>
@@ -15,7 +32,7 @@
   </button>
   {#if open}
     <div class="ctx-sec__body">
-      <div class="hist">
+      <div class="hist" bind:this={histEl} on:scroll={onScroll}>
         {#if history.length === 0}
           <div class="hist__empty muted">(empty — first turn)</div>
         {:else}
