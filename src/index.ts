@@ -39,10 +39,12 @@ client.once(Events.ClientReady, async (c) => {
     try {
       const { startMindTick } = await import('./voice/mind-tick');
       const { startWsServer } = await import('./dashboard/ws-server');
+      const { startHttpServer } = await import('./dashboard/http-api');
       startMindTick();
       startWsServer();
+      startHttpServer(c);
     } catch (err) {
-      console.error('[startup] dashboard WS failed:', err);
+      console.error('[startup] dashboard WS/HTTP failed:', err);
     }
   }
 });
