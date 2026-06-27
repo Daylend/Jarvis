@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from '$app/environment';
   import { mind } from '$lib/mindStore';
   import { sendSelectSlice } from '$lib/ws';
   import { esc } from '$lib/util';
@@ -16,7 +17,7 @@
     sendSelectSlice(id);
   }
 
-  $: autoScroll(slices.length);
+  $: if (browser) autoScroll(slices.length);
   function autoScroll(_n: number) {
     requestAnimationFrame(() => {
       const el = document.getElementById('timeline');
