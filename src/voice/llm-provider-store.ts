@@ -112,6 +112,19 @@ class LlmProviderStore {
     };
   }
 
+  /**
+   * Streaming variant: same as buildRequest but with `stream: true`.
+   * Both backends (llama.cpp, OpenRouter) support OpenAI-compatible SSE.
+   * Returned body is the OpenAI chat-completions request with stream enabled.
+   */
+  buildStreamRequest(messages: unknown[], tools: unknown[]): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+    const req = this.buildRequest(messages, tools);
+    return { url: req.url, headers: req.headers, body: { ...req.body, stream: true } };
+  }
+
+  /** Streaming is always available now (both backends support SSE). */
+  isStreamingCapable(): boolean { return true; }
+
   private readState(): LlmState | null {
     try {
       const data = JSON.parse(fs.readFileSync(config.jarvisLlmStatePath, 'utf-8'));

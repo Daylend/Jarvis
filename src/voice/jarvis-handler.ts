@@ -1,4 +1,3 @@
-import axios from 'axios';
 import type { Client, Message, VoiceBasedChannel, GuildTextBasedChannel } from 'discord.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { config } from '../config';
@@ -8,6 +7,7 @@ import { skillStore } from './skill-store';
 import { personalityStore } from './personality-store';
 import { llmProviderStore } from './llm-provider-store';
 import { conversationStore, type StoredChatMessage } from './conversation-store';
+import { streamChatCompletion } from './llm-stream';
 import { mindBus } from './mind-bus';
 import { mindState } from './mind-state';
 import type { HistoryMessage, SystemPromptParts, TransientFields, TurnSource, VoiceLine } from './mind-types';
@@ -389,6 +389,10 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
     let finalText: string | null = null;
     let toolDelivered = false;
     let iterCount = 0;
+    // streaming telemetry accumulators (per turn)
+    let firstTokenTime: number | null = null;
+    let outputTokens = 0;
+    let thinkAcc = '';
 
     for (let iter = 0; iter < config.llmMaxToolLoop; iter++) {
       iterCount = iter + 1;
@@ -397,25 +401,33 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       mindBus.emit('llm:iter', { key: historyKey, iter: iterCount, max: config.llmMaxToolLoop });
 
       try {
-        const { url, headers, body } = llmProviderStore.buildRequest(messages, toolRegistry.getAllDefinitions());
-        const response = await axios.post(url, body, { headers, timeout: config.jarvisLlmTimeoutMs });
+        const { url, headers, body } = llmProviderStore.buildStreamRequest(messages, toolRegistry.getAllDefinitions());
 
-        console.log(
-          `[jarvis] LLM HTTP ${response.status}, choices: ${response.data.choices?.length ?? 'none'}, raw: ${JSON.stringify(response.data).slice(0, 500)}`,
-        );
+        const assistantMsg = await streamChatCompletion(url, headers, body, config.jarvisLlmTimeoutMs, {
+          onFirstDelta: () => {
+            if (firstTokenTime === null) {
+              firstTokenTime = performance.now();
+              const ttft = Math.round(firstTokenTime - t0);
+              mindState.updateStats({ ttft });
+              mindBus.emit('llm:ttft', { key: historyKey, ms: ttft });
+            }
+          },
+          onThink: (text) => {
+            thinkAcc += text;
+            mindBus.emit('llm:think', { key: historyKey, text });
+            mindState.patchSlice({ trace: thinkAcc });
+          },
+          onToken: (text) => {
+            outputTokens += Math.max(1, Math.ceil(text.length / 4));
+            mindBus.emit('llm:token', { key: historyKey, text });
+          },
+        });
 
-        const choice = response.data.choices?.[0];
-        if (!choice) {
-          console.error('[jarvis] LLM response had no choices');
-          break;
-        }
-
-        const assistantMsg = choice.message as ChatMessage;
-        const sanitizedContent = sanitizeLlmContent(assistantMsg.content);
-        console.log(`[jarvis] Raw LLM message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, finish_reason: choice.finish_reason }));
+        const sanitizedContent = sanitizeLlmContent(assistantMsg.content || null);
+        console.log(`[jarvis] Streamed message:`, JSON.stringify({ role: assistantMsg.role, content_preview: assistantMsg.content?.slice(0, 300), sanitized_preview: sanitizedContent?.slice(0, 300), tool_calls: assistantMsg.tool_calls, thinking_preview: assistantMsg.thinking?.slice(0, 200) }));
 
         if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-          messages.push(assistantMsg);
+          messages.push(assistantMsg as ChatMessage);
 
           for (const tc of assistantMsg.tool_calls) {
             const toolName = tc.function.name;
@@ -512,26 +524,20 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
         }
 
         if (sanitizedContent) {
-          messages.push(assistantMsg);
+          messages.push({ role: 'assistant', content: sanitizedContent } as ChatMessage);
           finalText = sanitizedContent;
-          // Non-streaming (Phase 1): no token deltas. Emit a single ttft ≈ total
-          // generation time and the whole reply as one final. Phase 2 replaces
-          // this with real streaming llm:token/llm:ttft/llm:think deltas.
           break;
         }
 
-        if (choice.finish_reason === 'length') {
-          console.warn('[jarvis] LLM hit token limit — no output produced (try increasing max_tokens)');
-        }
-        console.warn('[jarvis] LLM returned neither content nor tool calls, keys:', Object.keys(assistantMsg), 'finish_reason:', choice.finish_reason);
+        console.warn('[jarvis] LLM streamed neither content nor tool calls');
         break;
       } catch (err) {
         const errorMsg = (err as Error).message;
-        console.error('[jarvis] LLM call failed:', errorMsg);
+        console.error('[jarvis] LLM stream failed:', errorMsg);
         if (!toolDelivered) {
           await errorFn('Jarvis: could not reach LLM').catch(() => {});
         } else {
-          console.log(`[jarvis] LLM call failed but tool already delivered — suppressing error`);
+          console.log(`[jarvis] LLM stream failed but tool already delivered — suppressing error`);
         }
         break;
       }
@@ -551,15 +557,13 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
 
     if (finalText && !toolDelivered) {
       console.log(`[jarvis] Response in ${elapsed}ms: "${finalText.slice(0, 120)}${finalText.length > 120 ? '...' : ''}"`);
-      const tokensOut = Math.max(1, Math.round(finalText.length / 4));
+      // Token deltas were streamed via llm:token during the stream. Compute real
+      // tok/s from first-token-time to now (generation throughput, not TTFT-inclusive).
+      const tokensOut = Math.max(1, outputTokens || Math.round(finalText.length / 4));
       const tokensIn = Math.max(1, Math.round(usedTokens));
-      const tokPerSec = elapsed > 0 ? Math.round((tokensOut / elapsed) * 1000) : 0;
-      mindState.updateStats({ tokPerSec, ttft: elapsed });
-      // Non-streaming (Phase 1): emit the whole reply as a single token delta so
-      // the generating tail renders, then finalize. Phase 2 replaces this with a
-      // real streamed token sequence.
-      mindBus.emit('llm:ttft', { key: historyKey, ms: elapsed });
-      mindBus.emit('llm:token', { key: historyKey, text: finalText });
+      const genMs = firstTokenTime !== null ? Math.max(1, performance.now() - firstTokenTime) : elapsed;
+      const tokPerSec = genMs > 0 ? Math.round((tokensOut / genMs) * 1000) : 0;
+      mindState.updateStats({ tokPerSec });
       mindBus.emit('llm:final', { key: historyKey, text: finalText, tokensIn, tokensOut, tokPerSec, elapsedMs: elapsed });
       mindState.patchSlice({ reply: finalText, status: 'done', stats: { ...mindState.stats } });
       try {
