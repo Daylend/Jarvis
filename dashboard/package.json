@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.0",
     "@sveltejs/kit": "^2.8.0",

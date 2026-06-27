@@ -66,8 +66,9 @@ services:
     container_name: paxfax-dashboard
     restart: unless-stopped
     environment:
-      - PUBLIC_DASHBOARD_WS_URL=${PUBLIC_DASHBOARD_WS_URL:-ws://paxfax:7780}
-      - PUBLIC_DASHBOARD_HTTP_URL=${PUBLIC_DASHBOARD_HTTP_URL:-http://paxfax:7781}
+      - BOT_HOST=paxfax
+      - BOT_HTTP_PORT=7781
+      - BOT_WS_PORT=7780
     depends_on:
       - paxfax
     logging:

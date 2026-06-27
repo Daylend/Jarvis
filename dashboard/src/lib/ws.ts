@@ -1,9 +1,12 @@
 // WebSocket client: connects to the bot's in-process mind-bus WS server and
 // dispatches events into the Svelte store. Reconnects with backoff.
-import { env } from '$env/dynamic/public';
+// The dashboard gateway proxies the WS upgrade on the same origin.
 import { applyEvent } from './mindStore';
 
-const WS_URL = env.PUBLIC_DASHBOARD_WS_URL || `ws://${window.location.hostname}:7780`;
+const WS_URL = (() => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}`;
+})();
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;

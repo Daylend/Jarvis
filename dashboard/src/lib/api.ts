@@ -1,10 +1,9 @@
 // Thin fetch client for the dashboard HTTP API. All calls return JSON.
-import { env } from '$env/dynamic/public';
-
-const BASE = env.PUBLIC_DASHBOARD_HTTP_URL || '';
+// The dashboard gateway reverse-proxies /api/* to the bot, so calls are
+// same-origin (relative).
 
 function url(path: string): string {
-  return BASE ? `${BASE}${path}` : path;
+  return path;
 }
 
 async function call<T = any>(path: string, opts: RequestInit = {}): Promise<T> {

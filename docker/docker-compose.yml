@@ -48,8 +48,9 @@ services:
       dockerfile: dashboard/Dockerfile
     restart: unless-stopped
     environment:
-      - PUBLIC_DASHBOARD_WS_URL=ws://localhost:7780
-      - PUBLIC_DASHBOARD_HTTP_URL=http://localhost:7781
+      - BOT_HOST=paxfax
+      - BOT_HTTP_PORT=7781
+      - BOT_WS_PORT=7780
     ports:
       - "3000:3000"
     depends_on:
