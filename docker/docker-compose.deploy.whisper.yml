@@ -42,6 +42,10 @@ services:
       - JARVIS_LLM_STATE_PATH=${JARVIS_LLM_STATE_PATH:-/app/data/llm-state.json}
       - TTS_URL=${TTS_URL:-http://tts:8860}
       - SOUNDS_DIR=/app/sounds
+      # Mind dashboard (in-process WS + HTTP, owner-only via reverse proxy)
+      - DASHBOARD_ENABLED=${DASHBOARD_ENABLED:-true}
+      - DASHBOARD_WS_PORT=${DASHBOARD_WS_PORT:-7780}
+      - DASHBOARD_HTTP_PORT=${DASHBOARD_HTTP_PORT:-7781}
     logging:
       driver: "json-file"
       options:
@@ -54,6 +58,25 @@ services:
         condition: service_healthy
       tts:
         condition: service_healthy
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  dashboard:
+    image: registry.example.com/paxfax-dashboard:latest
+    container_name: paxfax-dashboard
+    restart: unless-stopped
+    environment:
+      - PUBLIC_DASHBOARD_WS_URL=${PUBLIC_DASHBOARD_WS_URL:-ws://paxfax:7780}
+      - PUBLIC_DASHBOARD_HTTP_URL=${PUBLIC_DASHBOARD_HTTP_URL:-http://paxfax:7781}
+    depends_on:
+      - paxfax
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - npm-net
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
