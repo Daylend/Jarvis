@@ -99,6 +99,7 @@ VOICE_IDLE_TIMEOUT_SEC=900
 TRIGGER_PHRASE=jarvis
 JARVIS_CONTEXT_SECONDS=180
 JARVIS_MENTION_ENABLED=true           # Route owner @-mentions through Jarvis LLM (shared history)
+JARVIS_MENTION_CONTEXT_MESSAGES=50    # Recent text-channel msgs pulled as transient context on owner @mention
 
 # LLM Backend Configuration
 LLAMA_CPP_URL=http://llama-cpp:8080/v1

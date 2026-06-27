@@ -176,10 +176,9 @@ const envSchema = z.object({
   REMINDER_TIMEZONE: z.string().default('America/New_York'),
   // Chat @-mention → Jarvis (owner only). Kill switch.
   JARVIS_MENTION_ENABLED: z.enum(['true', 'false']).default('true'),
-  // Mind dashboard (in-process WS + HTTP, owner-only via reverse proxy).
-  DASHBOARD_ENABLED: z.enum(['true', 'false']).default('false'),
-  DASHBOARD_WS_PORT: z.coerce.number().int().min(1).default(7780),
-  DASHBOARD_HTTP_PORT: z.coerce.number().int().min(1).default(7781),
+  // How many recent text-channel messages to pull as transient context when the
+  // owner @mentions Jarvis. Each message is size-capped; the block is budget-capped.
+  JARVIS_MENTION_CONTEXT_MESSAGES: z.coerce.number().int().min(0).default(50),
 });
 const env = envSchema.parse(process.env);
 
@@ -230,8 +229,5 @@ export const config = {
   reminderTimezone: env.REMINDER_TIMEZONE,
   // Chat @-mention → Jarvis (owner only). Kill switch.
   jarvisMentionEnabled: env.JARVIS_MENTION_ENABLED === 'true',
-  // Mind dashboard
-  dashboardEnabled: env.DASHBOARD_ENABLED === 'true',
-  dashboardWsPort: env.DASHBOARD_WS_PORT,
-  dashboardHttpPort: env.DASHBOARD_HTTP_PORT,
+  jarvisMentionContextMessages: env.JARVIS_MENTION_CONTEXT_MESSAGES,
 };

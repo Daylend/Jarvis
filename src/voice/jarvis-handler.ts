@@ -57,6 +57,7 @@ interface JarvisLoopOpts {
   historyKey: string;
   command: string;
   contextPreamble: string | null;
+  textContext: string | null;
   guildId: string;
   channelId: string;
   replyFn: (text: string) => Promise<void>;
@@ -275,7 +276,7 @@ async function requestApproval(
 }
 
 async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
-  const { client, historyKey, command, contextPreamble, guildId, channelId, replyFn, errorFn, suppressEmptyFallback } = opts;
+  const { client, historyKey, command, contextPreamble, textContext, guildId, channelId, replyFn, errorFn, suppressEmptyFallback } = opts;
 
   const prev = ownerLock.get(historyKey) ?? Promise.resolve();
   let releaseLock: () => void;
@@ -333,6 +334,9 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       if (contextPreamble) {
         preview.push({ role: 'user', content: `[Voice Channel Context]\n${contextPreamble}` });
       }
+      if (textContext) {
+        preview.push({ role: 'user', content: `[Text Channel Context]\n${textContext}` });
+      }
       preview.push({ role: 'user', content: command });
       return estimateTokens(preview);
     };
@@ -350,12 +354,11 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
 
     const nowLine = `Current time: ${formatCurrentTime()} (${config.reminderTimezone})`;
 
-    let userContent: string;
-    if (contextPreamble) {
-      userContent = `${nowLine}\n\n[VOICE CHANNEL]\n${contextPreamble}\n\n[COMMAND]\n${command}`;
-    } else {
-      userContent = `${nowLine}\n\n[COMMAND]\n${command}`;
-    }
+    const sections: string[] = [nowLine];
+    if (contextPreamble) sections.push(`[VOICE CHANNEL]\n${contextPreamble}`);
+    if (textContext) sections.push(`[TEXT CHANNEL]\n${textContext}`);
+    sections.push(`[COMMAND]\n${command}`);
+    const userContent = sections.join('\n\n');
 
     const historyStart = messages.length;
     messages.push({ role: 'user', content: userContent });
@@ -641,6 +644,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
       historyKey: ownerHistoryKey(),
       command,
       contextPreamble,
+      textContext: null,
       guildId: payload.ctx.guildId,
       channelId: payload.ctx.channelId,
       replyFn,
@@ -722,6 +726,7 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
       historyKey,
       command,
       contextPreamble: null,
+      textContext: null,
       guildId,
       channelId,
       replyFn,
@@ -817,6 +822,77 @@ async function gatherVoiceContext(client: Client): Promise<VoiceContext> {
   return { guildId, channelId, memberList, contextBlock };
 }
 
+// Per-message body cap (chars). Huge pastes/logs are truncated mid-content with a
+// marker so a single giant blob can't monopolize the context window.
+const TEXT_CONTEXT_MSG_MAX_CHARS = 1000;
+// Hard cap on the assembled text-channel context block (chars). Independent of the
+// LLM token budget (which is also enforced later); this just bounds the fetch work
+// and prevents pathological cases before the budget trim loop runs.
+const TEXT_CONTEXT_BLOCK_MAX_CHARS = 12_000;
+
+/**
+ * Pull recent messages from the guild text channel the owner @mentioned Jarvis in,
+ * formatted as a labelled, size-capped transient context block. Excludes the
+ * triggering mention message itself and any bot messages.
+ *
+ * Returns null when disabled (0 messages) or nothing was retrieved.
+ */
+async function gatherTextChannelContext(message: Message): Promise<string | null> {
+  const limit = config.jarvisMentionContextMessages;
+  if (limit <= 0) return null;
+
+  const channel = message.channel;
+  if (!channel || !('messages' in channel)) return null;
+
+  let fetched;
+  try {
+    fetched = await channel.messages.fetch({ limit: limit + 1, cache: false });
+  } catch (err) {
+    console.warn('[mention-jarvis] Failed to fetch text channel history:', (err as Error).message);
+    return null;
+  }
+
+  const triggerId = message.id;
+  const lines: string[] = [];
+  let blockChars = 0;
+
+  for (const m of fetched.values()) {
+    if (m.id === triggerId) continue;
+    if (m.author?.bot) continue;
+
+    const ts = m.createdAt;
+    const stamp = ts.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+    const author = m.author.id === config.ownerId ? `${m.author.username} (Owner)` : m.author.username;
+
+    let body = m.content?.trim() ?? '';
+    if (m.attachments.size > 0) {
+      const atts = m.attachments.map((a) => `[attachment: ${a.name || a.contentType || 'file'}]`).join(' ');
+      body = body ? `${body} ${atts}` : atts;
+    }
+    if (!body) continue;
+
+    if (body.length > TEXT_CONTEXT_MSG_MAX_CHARS) {
+      body = `${body.slice(0, TEXT_CONTEXT_MSG_MAX_CHARS)}…[truncated, ${body.length} chars]`;
+    }
+
+    const line = `[${stamp}] ${author}: ${body}`;
+    if (blockChars + line.length > TEXT_CONTEXT_BLOCK_MAX_CHARS) {
+      lines.push('…[earlier messages omitted — text context size cap reached]');
+      break;
+    }
+    lines.push(line);
+    blockChars += line.length;
+  }
+
+  if (lines.length === 0) return null;
+
+  // Newest-last ordering (chronological) reads more naturally for the model.
+  lines.reverse();
+  return `Recent text-channel messages (newest at bottom):\n${lines.join('\n')}`;
+}
+
 export async function handleDmJarvis(client: Client, message: Message): Promise<void> {
   const command = message.content.trim();
   if (!command) return;
@@ -837,6 +913,7 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
     historyKey: ownerHistoryKey(),
     command: dmCommand,
     contextPreamble,
+    textContext: null,
     guildId,
     channelId,
     replyFn,
@@ -857,6 +934,13 @@ export async function handleMentionJarvis(client: Client, message: Message): Pro
   const { guildId, channelId, memberList, contextBlock } = await gatherVoiceContext(client);
   const contextPreamble = buildContextPreamble(memberList, contextBlock);
 
+  let textContext: string | null = null;
+  try {
+    textContext = await gatherTextChannelContext(message);
+  } catch (err) {
+    console.warn('[mention-jarvis] Failed to gather text channel context:', (err as Error).message);
+  }
+
   let where: string;
   try {
     const guild = message.guild;
@@ -875,6 +959,7 @@ export async function handleMentionJarvis(client: Client, message: Message): Pro
     historyKey: ownerHistoryKey(),
     command: where,
     contextPreamble,
+    textContext,
     guildId,
     channelId,
     replyFn,
