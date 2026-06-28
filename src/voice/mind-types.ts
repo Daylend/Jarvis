@@ -138,10 +138,13 @@ export interface MindEventMap {
   hello: {
     session: MindSession;
     slices: SliceSummary[];
-    context: MindContextPayload | null;
+    context: MindContextPayload;
+    voiceBuf?: VoiceLine[];
   };
   /** Sent by a client to scrub a past slice — not emitted by the loop. */
   'mind:select': { id: number | null };
+  /** Sent by a client to request the current state (rehydrate) — not emitted by the loop. */
+  'mind:hello': Record<string, never>;
 }
 
 export type MindEventType = keyof MindEventMap;

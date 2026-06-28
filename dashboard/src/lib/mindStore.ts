@@ -2,6 +2,7 @@
 // `dashboard/mockups/shared/glass.js` into store mutations.
 import { writable } from 'svelte/store';
 import type {
+  HelloPayload,
   MindContextPayload,
   MindSession,
   SliceSummary,
@@ -91,6 +92,13 @@ export function applyEvent(evt: { type: string; payload: any }): void {
           setTransient(s, c.transient);
           s.stats = { ...s.stats, ...c.stats };
           s.context = c.context;
+        }
+        // Seed the voice window from the rolling buffer the server carries so
+        // the transcript pane paints immediately on refresh/reconnect, even
+        // before the next live transcript:final arrives.
+        if (payload.voiceBuf && payload.voiceBuf.length > 0) {
+          s.voiceBuf = payload.voiceBuf.map((v: VoiceLine) => ({ ...v }));
+          while (s.voiceBuf.length > 24) s.voiceBuf.shift();
         }
         break;
       }

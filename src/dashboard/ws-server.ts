@@ -25,6 +25,14 @@ function broadcast(event: MindEvent): void {
 function handleClientMessage(ws: WebSocket, raw: string): void {
   try {
     const msg = JSON.parse(raw);
+    if (msg.type === 'mind:hello') {
+      // Client-driven rehydrate: reply with the current mind state so a
+      // refresh/reconnect repopulates immediately. Replaces the eager hello
+      // that was sent on connect (which could race the gateway proxy and be
+      // dropped before the browser socket was upgraded).
+      send(ws, { type: 'hello', payload: mindState.rehydrate(), t: Date.now() });
+      return;
+    }
     if (msg.type === 'mind:select' && msg.payload && typeof msg.payload.id !== 'undefined') {
       mindState.selectSlice(msg.payload.id === null ? null : Number(msg.payload.id));
     }
@@ -39,10 +47,10 @@ export function startWsServer(): void {
 
   wss.on('connection', (ws) => {
     clients.add(ws);
-    // Rehydrate: send hello with session + slices + last context.
-    const rehydrate = mindState.rehydrate();
-    send(ws, { type: 'hello', payload: rehydrate, t: Date.now() });
-
+    // Rehydrate is now client-driven: the browser sends `mind:hello` on open,
+    // and we reply in handleClientMessage. This avoids the race where an eager
+    // hello here could be dropped by the gateway proxy before the browser
+    // socket finished upgrading.
     ws.on('message', (data) => handleClientMessage(ws, data.toString()));
     ws.on('close', () => clients.delete(ws));
     ws.on('error', () => clients.delete(ws));

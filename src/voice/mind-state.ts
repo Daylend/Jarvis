@@ -25,6 +25,27 @@ import type {
 const MAX_SLICES = 50;
 const MAX_VOICE = 40;
 
+// Zeroed system prompt so rehydrate can return a non-null context even on a
+// fresh boot with no captured slices yet — keeps the dashboard from showing a
+// blank context pane until the first turn lands.
+const EMPTY_SYSTEM_PROMPT: SystemPromptParts = {
+  header: '',
+  rules: [],
+  persona: '',
+  examples: '',
+  footer: '',
+  notes: [],
+  skills: [],
+};
+
+// Zeroed transient so rehydrate can return a non-null context on a fresh boot.
+const EMPTY_TRANSIENT: TransientFields = {
+  time: '',
+  members: [],
+  voiceCtx: [],
+  command: '',
+};
+
 function summarizeSlice(s: {
   id: number; t: number; time: string; command: string;
   status: 'pending' | 'done'; reply: string | null; stats: MindStats;
@@ -189,22 +210,38 @@ class MindState {
   }
 
   /** Rehydrate payload for a freshly-connected WS client. */
-  rehydrate(): { session: MindSession; slices: SliceSummary[]; context: MindContextPayload | null } {
-    let context: MindContextPayload | null = null;
-    if (this.slices.length > 0) {
-      const last = this.slices[this.slices.length - 1];
-      context = {
-        systemPrompt: last.systemPrompt,
-        history: last.history,
-        transient: last.transient,
-        context: last.context,
-        stats: { ...this.stats },
-      };
-    }
+  rehydrate(): {
+    session: MindSession;
+    slices: SliceSummary[];
+    context: MindContextPayload;
+    voiceBuf: VoiceLine[];
+  } {
+    const last = this.slices[this.slices.length - 1];
+    const context: MindContextPayload = last
+      ? {
+          // Big structured fields from the last captured slice...
+          systemPrompt: last.systemPrompt,
+          history: last.history,
+          transient: last.transient,
+          // ...but always overlay LIVE stats/context so the dashboard reflects
+          // current telemetry rather than the frozen slice snapshot.
+          context: { ...this.context },
+          stats: { ...this.stats },
+        }
+      : {
+          // Fresh boot / no turns yet: empty structured fields but live stats/
+          // context/session so the gauges + session pill paint immediately.
+          systemPrompt: EMPTY_SYSTEM_PROMPT,
+          history: [],
+          transient: EMPTY_TRANSIENT,
+          context: { ...this.context },
+          stats: { ...this.stats },
+        };
     return {
       session: { ...this.session },
       slices: this.slices.map((s) => summarizeSlice(s)),
       context,
+      voiceBuf: this.voiceBuf.slice(-12),
     };
   }
 

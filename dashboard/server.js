@@ -48,9 +48,28 @@ function proxyHttp(req, res) {
 
 function proxyWs(req, socket, head) {
   const upstream = new WebSocket(`ws://${BOT_HOST}:${BOT_WS_PORT}`);
+  // Buffer messages the upstream (bot) emits before the browser socket has
+  // finished upgrading, then flush them once handleUpgrade runs. Without this,
+  // an eager `hello` sent on connect can land before `pipeWs` wires its
+  // `message` handler and be silently dropped — leaving the dashboard blank on
+  // refresh until the next live event.
+  const early = [];
+  let clientWs = null;
+  const onEarlyMessage = (d, isBinary) => {
+    if (!clientWs) {
+      early.push(isBinary ? d : d.toString());
+    }
+    // Once upgraded, pipeWs owns the upstream->client path; this handler is
+    // removed below.
+  };
+  upstream.on('message', onEarlyMessage);
   upstream.on('open', () => {
-    wss.handleUpgrade(req, socket, head, (clientWs) => {
-      pipeWs(clientWs, upstream);
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      clientWs = ws;
+      for (const m of early) ws.send(m);
+      early.length = 0;
+      upstream.removeListener('message', onEarlyMessage);
+      pipeWs(ws, upstream);
     });
   });
   upstream.on('error', () => {

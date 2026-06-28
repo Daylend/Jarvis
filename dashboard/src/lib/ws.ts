@@ -32,6 +32,14 @@ function connect(): void {
   ws.onopen = () => {
     reconnectDelay = 1000;
     console.log('[ws] connected to', WS_URL);
+    // Client-driven rehydrate: ask the server for the current mind state so a
+    // refresh/reconnect repopulates the store immediately rather than waiting
+    // for the next live event. The server replies with a `hello` event.
+    try {
+      if (ws) ws.send(JSON.stringify({ type: 'mind:hello' }));
+    } catch (err) {
+      console.warn('[ws] hello request failed', err);
+    }
   };
 
   ws.onmessage = (ev) => {

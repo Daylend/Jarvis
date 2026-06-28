@@ -98,6 +98,14 @@ export type MindEventType =
   | 'state:tick'
   | 'hello';
 
+/** hello (rehydrate) payload sent by the server on connect/reconnect. */
+export interface HelloPayload {
+  session: MindSession;
+  slices: SliceSummary[];
+  context: MindContextPayload;
+  voiceBuf?: VoiceLine[];
+}
+
 export interface MindEvent {
   type: MindEventType;
   payload: any;
