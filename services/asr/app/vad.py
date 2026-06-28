@@ -17,6 +17,13 @@ FRAME_SIZE = 512
 class Segment(NamedTuple):
     start_sample: int
     end_sample: int
+    # Unpadded voiced span (real onset frame .. last voiced frame_end) and the
+    # Silero prob at onset. Used downstream to compute voiced-core duration and
+    # to detect hallucinated text disproportionate to actual voicing. The
+    # padded start_sample/end_sample are still what gets sliced for transcription.
+    voiced_start_sample: int = 0
+    voiced_end_sample: int = 0
+    onset_prob: float = 0.0
 
 
 class VadState:
@@ -26,6 +33,11 @@ class VadState:
         self._in_speech: bool = False
         self._speech_start_sample: int = 0
         self._last_speech_sample: int = 0
+        # Real onset frame (unpadded) + the Silero prob there. Captured at
+        # speech START so downstream can measure the voiced core independent of
+        # the padded segment span, and log onset confidence.
+        self._onset_sample: int = 0
+        self._onset_prob: float = 0.0
         self._pad_samples = int(settings.vad_speech_pad_ms * settings.sample_rate / 1000)
         self._min_silence_samples = int(settings.vad_min_silence_ms * settings.sample_rate / 1000)
         self._min_speech_samples = int(settings.vad_min_speech_ms * settings.sample_rate / 1000)
@@ -48,6 +60,18 @@ class VadState:
 
     def set_trigger_silence_callback(self, cb: Callable[[int], None]) -> None:
         self._on_trigger_silence = cb
+
+    def _segment(self, start: int, end: int) -> Segment:
+        """Build a Segment carrying the padded span plus the unpadded voiced
+        core (onset .. last_speech) and onset prob. Must be called BEFORE any
+        reset of the speech flags, while the current run's state is intact."""
+        return Segment(
+            start_sample=start,
+            end_sample=end,
+            voiced_start_sample=self._onset_sample,
+            voiced_end_sample=self._last_speech_sample,
+            onset_prob=self._onset_prob,
+        )
 
     def reset(self) -> None:
         self._reset_speech_flags()
@@ -78,6 +102,8 @@ class VadState:
                 if not self._in_speech:
                     self._in_speech = True
                     self._speech_start_sample = max(0, frame_start - self._pad_samples)
+                    self._onset_sample = frame_start
+                    self._onset_prob = prob
                     logger.info("[vad %d] speech START at sample %d (prob=%.3f)",
                                 self.stream_id, frame_start, prob)
                 self._last_speech_sample = frame_end
@@ -112,7 +138,7 @@ class VadState:
                             pass
                         else:
                             end = self._last_speech_sample + self._pad_samples
-                            segments.append(Segment(self._speech_start_sample, end))
+                            segments.append(self._segment(self._speech_start_sample, end))
                             logger.info("[vad %d] segment emitted: %d-%d (%.1fs)",
                                         self.stream_id, self._speech_start_sample, end,
                                         (end - self._speech_start_sample) / settings.sample_rate)
@@ -123,7 +149,7 @@ class VadState:
                         self._reset_speech()
 
                 elif duration_samples >= self._max_utterance_samples:
-                    segments.append(Segment(self._speech_start_sample, frame_end))
+                    segments.append(self._segment(self._speech_start_sample, frame_end))
                     logger.info("[vad %d] max utt segment: %d-%d (%.1fs)",
                                 self.stream_id, self._speech_start_sample, frame_end,
                                 duration_samples / settings.sample_rate)
@@ -145,7 +171,7 @@ class VadState:
             self._reset_speech()
             return None
         end = self._last_speech_sample + self._pad_samples
-        seg = Segment(self._speech_start_sample, end)
+        seg = self._segment(self._speech_start_sample, end)
         self._reset_speech()
         return seg
 
@@ -168,7 +194,7 @@ class VadState:
             self._reset_speech()
             return None
         end = self._last_speech_sample + self._pad_samples
-        seg = Segment(self._speech_start_sample, end)
+        seg = self._segment(self._speech_start_sample, end)
         logger.info("[vad %d] force-close segment: %d-%d (%.1fs)%s",
                     self.stream_id, self._speech_start_sample, end,
                     (end - self._speech_start_sample) / settings.sample_rate,
@@ -195,6 +221,8 @@ class VadState:
         self._in_speech = False
         self._speech_start_sample = 0
         self._last_speech_sample = 0
+        self._onset_sample = 0
+        self._onset_prob = 0.0
         self._triggered_this_silence = False
 
     def _reset_speech(self) -> None:

@@ -118,6 +118,10 @@ class StreamState:
         self._candidate: dict | None = None  # {lineId, deadline}
         self._prev_in_speech: bool = False
         self._st_task: asyncio.Task | None = None
+        # Most recent Smart Turn P(turn complete) actually applied to a
+        # decision (incomplete keep-listening or complete close). Stale/error
+        # results don't update it. Logged at finalize for hallucination tuning.
+        self._last_smart_turn_p: float | None = None
 
         if self._smart_turn_enabled:
             self.vad.set_trigger_silence_callback(self._on_trigger_silence)
@@ -154,6 +158,7 @@ class StreamState:
             return
 
         if p_done < settings.smart_turn_complete_threshold:
+            self._last_smart_turn_p = p_done
             logger.info("[stream %d] smart-turn incomplete (p=%.3f) — keep listening",
                         self.stream_id, p_done)
             return
@@ -163,6 +168,7 @@ class StreamState:
             return
         if snapshot != self._revision:
             return  # speech resumed between inference and close
+        self._last_smart_turn_p = p_done
         seg = self.vad.force_close_segment(provisional=True)
         if seg is None:
             return
@@ -378,12 +384,50 @@ class StreamState:
         if not text:
             return None
 
+        # --- Voiced-core metrics (root-cause hallucination detection) ---
+        # The padded segment span includes speech_pad + trailing silence up to
+        # the close, so it overstates real voicing. The unpadded voiced core
+        # (onset .. last_speech) is what speech was actually in the clip.
+        voiced_samples = max(0, seg.voiced_end_sample - seg.voiced_start_sample)
+        voiced_s = voiced_samples / SAMPLE_RATE
+        word_count = len(text.split())
+        # max(0.1, ...) guards against a near-zero voiced core (e.g. a single
+        # voiced frame) producing an absurd wps; such clips are dropped by the
+        # gate below exactly because any multi-word text is implausible there.
+        wps = word_count / max(0.1, voiced_s)
+
         # Drop lines that are common STT hallucinations. "Jean-Paul" is a
-        # frequent Whisper/Granite phantom output during silence/noise.
+        # frequent Whisper/Granite phantom output during silence/noise. Cheap
+        # fast-path retained alongside the general wps gate below.
+        dropped_phantom = False
         if "jean-paul" in text.lower():
-            logger.info("[stream %d] dropped hallucinated line %s: %r",
+            logger.info("[stream %d] dropped hallucinated line %s (jean-paul): %r",
                         self.stream_id, line_id, text)
+            dropped_phantom = True
+        elif word_count > 0 and wps > settings.halluc_max_words_per_voiced_s:
+            # General root-cause guard: fluent text disproportionate to actual
+            # voicing. Real speech ~2-5 wps; phantoms emit many words from
+            # <1s of ambiguous/noise voicing (Werner incident: ~9.4 wps).
+            # Catches any future proper-noun phantom without a blocklist.
+            logger.info(
+                "[stream %d] dropped hallucinated line %s (wps=%.1f > %.1f, "
+                "voiced=%.2fs words=%d): %r",
+                self.stream_id, line_id, wps, settings.halluc_max_words_per_voiced_s,
+                voiced_s, word_count, text,
+            )
+            dropped_phantom = True
+
+        if dropped_phantom:
             return None
+
+        logger.info(
+            "[stream %d] finalize %s prov=%s padded=%.0fms voiced=%.0fms "
+            "onset_prob=%.3f st_p=%s words=%d wps=%.1f: %r",
+            self.stream_id, line_id, provisional, duration_ms,
+            voiced_s * 1000, seg.onset_prob,
+            "n/a" if self._last_smart_turn_p is None else f"{self._last_smart_turn_p:.3f}",
+            word_count, wps, text,
+        )
 
         return {
             "type": "final",

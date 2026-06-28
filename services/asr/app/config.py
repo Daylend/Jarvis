@@ -57,10 +57,17 @@ class Settings(BaseModel):
     smart_turn_sample_rate: int = int(os.getenv("ASR_SMART_TURN_SAMPLE_RATE", "16000"))
     smart_turn_window_s: float = float(os.getenv("ASR_SMART_TURN_WINDOW_S", "8"))
     smart_turn_trigger_silence_ms: int = int(os.getenv("ASR_SMART_TURN_TRIGGER_SILENCE_MS", "200"))
-    smart_turn_complete_threshold: float = float(os.getenv("ASR_SMART_TURN_COMPLETE_THRESHOLD", "0.50"))
+    smart_turn_complete_threshold: float = float(os.getenv("ASR_SMART_TURN_COMPLETE_THRESHOLD", "0.70"))
     smart_turn_commit_grace_ms: int = int(os.getenv("ASR_SMART_TURN_COMMIT_GRACE_MS", "100"))
     smart_turn_hard_silence_ms: int = int(os.getenv("ASR_SMART_TURN_HARD_SILENCE_MS", "1200"))
     smart_turn_max_concurrency: int = int(os.getenv("ASR_SMART_TURN_MAX_CONCURRENCY", "4"))
+
+    # --- Hallucination guard (root-cause: fluent text disproportionate to
+    # actual voicing). Real speech is ~2-5 words/voiced-second; Granite phantoms
+    # like "He is the son of the former German footballer, Werner." emit ~9+
+    # words from <1s of ambiguous voicing. Drop finals whose words-per-voiced-
+    # second exceeds this. Replaces the reactive single-phrase blocklist. ---
+    halluc_max_words_per_voiced_s: float = float(os.getenv("ASR_HALLUC_MAX_WORDS_PER_VOICED_S", "7.0"))
 
 
 settings = Settings()
