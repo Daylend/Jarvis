@@ -378,6 +378,13 @@ class StreamState:
         if not text:
             return None
 
+        # Drop lines that are common STT hallucinations. "Jean-Paul" is a
+        # frequent Whisper/Granite phantom output during silence/noise.
+        if "jean-paul" in text.lower():
+            logger.info("[stream %d] dropped hallucinated line %s: %r",
+                        self.stream_id, line_id, text)
+            return None
+
         return {
             "type": "final",
             "streamId": self.stream_id,
