@@ -32,6 +32,8 @@ services:
       - ASR_VAD_MIN_SILENCE_MS=800
       - ASR_VAD_SPEECH_PAD_MS=300
       - ASR_MAX_UTTERANCE_S=24.0
+      - ASR_MAX_STREAMS_PER_SESSION=64
+      - ASR_INFERENCE_TIMEOUT_S=60
       - HF_HOME=/models/hf
       - TRANSFORMERS_CACHE=/models/hf
     volumes:

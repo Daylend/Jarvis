@@ -14,6 +14,12 @@ class Settings(BaseModel):
     language: str = os.getenv("ASR_LANGUAGE", "en")
     task: str = os.getenv("ASR_TASK", "transcribe")
     inference_queue_max: int = int(os.getenv("ASR_INFERENCE_QUEUE_MAX", "64"))
+    # Generous staleness bound: clips queue under saturation and are dropped
+    # (and surfaced) only if they exceed this wait. High RTF clears the queue
+    # well within this window; it's an escape valve, not aggressive bounding.
+    inference_timeout_s: float = float(os.getenv("ASR_INFERENCE_TIMEOUT_S", "60"))
+    # Per-session concurrent audio streams. Each stream ~2MB ring buffer.
+    max_streams_per_session: int = int(os.getenv("ASR_MAX_STREAMS_PER_SESSION", "64"))
 
     # --- Granite / OpenAI-compatible settings ---
     openai_base_url: str = os.getenv("ASR_OPENAI_BASE_URL", "http://llama-cpp:8080/v1")
@@ -35,7 +41,7 @@ class Settings(BaseModel):
     vad_min_silence_ms: int = int(os.getenv("ASR_VAD_MIN_SILENCE_MS", "500"))
     vad_speech_pad_ms: int = int(os.getenv("ASR_VAD_SPEECH_PAD_MS", "300"))
     max_utterance_s: float = float(os.getenv("ASR_MAX_UTTERANCE_S", "10.0"))
-    min_final_audio_ms: int = int(os.getenv("ASR_MIN_FINAL_AUDIO_MS", "300"))
+    min_final_audio_ms: int = int(os.getenv("ASR_MIN_FINAL_AUDIO_MS", "500"))
 
     endpoint_idle_ms: int = int(os.getenv("ASR_ENDPOINT_IDLE_MS", "1200"))
     endpoint_silence_ms: int = int(os.getenv("ASR_ENDPOINT_SILENCE_MS", "600"))

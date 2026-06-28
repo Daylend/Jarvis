@@ -14,8 +14,6 @@ from .stream import StreamState
 
 logger = logging.getLogger(__name__)
 
-MAX_STREAMS_PER_SESSION = 8
-
 
 class AsrSession:
     def __init__(self, websocket: WebSocket):
@@ -74,13 +72,13 @@ class AsrSession:
             if stream_id in self._streams:
                 logger.warning("[session %s] Stream %s already open", self._session_id, stream_id)
                 return
-            if len(self._streams) >= MAX_STREAMS_PER_SESSION:
+            if len(self._streams) >= settings.max_streams_per_session:
                 logger.warning("[session %s] refusing open stream=%s — at cap %d",
-                               self._session_id, stream_id, MAX_STREAMS_PER_SESSION)
+                               self._session_id, stream_id, settings.max_streams_per_session)
                 await self._send_json({
                     "type": "error",
                     "streamId": stream_id,
-                    "message": f"max-streams-per-session ({MAX_STREAMS_PER_SESSION}) reached",
+                    "message": f"max-streams-per-session ({settings.max_streams_per_session}) reached",
                 })
                 return
             logger.info("[session %s] Opening stream %s for user %s",
@@ -113,6 +111,8 @@ class AsrSession:
         pcm = data[4:]
         stream = self._streams.get(stream_id)
         if stream is None:
+            logger.debug("[session %s] PCM for unknown stream=%d (%d bytes) — dropped",
+                         self._session_id, stream_id, len(data))
             return
         events = await stream.accept_pcm(pcm)
         for event in events:

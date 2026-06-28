@@ -11,7 +11,7 @@ import torch
 from transformers import pipeline
 
 from ..config import settings
-from .base import Engine, EngineBusyError
+from .base import Engine
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +74,7 @@ class WhisperEngine(Engine):
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         job = _TranscriptionJob(audio=audio, future=fut)
-        try:
-            self.queue.put_nowait(job)
-        except asyncio.QueueFull:
-            raise EngineBusyError("inference queue full")
+        await self.queue.put(job)
         return await fut
 
     async def _worker(self) -> None:

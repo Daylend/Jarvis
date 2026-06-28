@@ -33,6 +33,8 @@ services:
       - ASR_SMART_TURN_COMMIT_GRACE_MS=100
       - ASR_SMART_TURN_HARD_SILENCE_MS=1200
       - ASR_SMART_TURN_MAX_CONCURRENCY=4
+      - ASR_MAX_STREAMS_PER_SESSION=64
+      - ASR_INFERENCE_TIMEOUT_S=60
       - HF_HOME=/models/hf
     volumes:
       - ../asr-models:/models

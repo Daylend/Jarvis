@@ -344,7 +344,9 @@ class StreamState:
         engine = get_engine()
         try:
             result = await asyncio.wait_for(
-                engine.transcribe(audio, SAMPLE_RATE), timeout=30.0)
+                engine.transcribe(audio, SAMPLE_RATE),
+                timeout=settings.inference_timeout_s,
+            )
         except EngineBusyError:
             logger.warning("[stream %d] engine busy, dropping segment %s",
                            self.stream_id, line_id)
@@ -357,7 +359,16 @@ class StreamState:
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
-            logger.error("[stream %d] inference timeout for %s", self.stream_id, line_id)
+            logger.warning(
+                "[stream %d] inference timed out after %.0fs, dropping stale segment %s",
+                self.stream_id, settings.inference_timeout_s, line_id,
+            )
+            await self._send_cb({
+                "type": "error",
+                "code": "inference_timeout",
+                "streamId": self.stream_id,
+                "message": "ASR inference timed out (stale segment dropped)",
+            })
             return None
         except Exception:
             logger.exception("[stream %d] inference error for %s", self.stream_id, line_id)

@@ -10,7 +10,7 @@ import numpy as np
 import soundfile as sf
 
 from ..config import settings
-from .base import Engine, EngineBusyError
+from .base import Engine
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,10 @@ class GraniteEngine(Engine):
         files = {"file": ("audio.wav", buf, "audio/wav")}
         data = {"model": settings.granite_model, "prompt": settings.granite_prompt}
 
-        if self._sem.locked():
-            raise EngineBusyError("granite concurrency saturated")
-
         t0 = time.perf_counter()
         async with self._sem:
             resp = await self._client.post(url, files=files, data=data)
-        resp.raise_for_status()
+            resp.raise_for_status()
         latency_ms = int((time.perf_counter() - t0) * 1000)
 
         text = " ".join((resp.json().get("text") or "").split())
