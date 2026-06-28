@@ -179,6 +179,10 @@ const envSchema = z.object({
   // How many recent text-channel messages to pull as transient context when the
   // owner @mentions Jarvis. Each message is size-capped; the block is budget-capped.
   JARVIS_MENTION_CONTEXT_MESSAGES: z.coerce.number().int().min(0).default(50),
+  // Dashboard (internal HTTP + WS control plane)
+  DASHBOARD_ENABLED: z.enum(['true', 'false']).default('true'),
+  DASHBOARD_WS_PORT: z.coerce.number().int().min(1).default(7780),
+  DASHBOARD_HTTP_PORT: z.coerce.number().int().min(1).default(7781),
 });
 const env = envSchema.parse(process.env);
 
@@ -230,4 +234,8 @@ export const config = {
   // Chat @-mention → Jarvis (owner only). Kill switch.
   jarvisMentionEnabled: env.JARVIS_MENTION_ENABLED === 'true',
   jarvisMentionContextMessages: env.JARVIS_MENTION_CONTEXT_MESSAGES,
+  // Dashboard (internal HTTP + WS control plane)
+  dashboardEnabled: env.DASHBOARD_ENABLED === 'true',
+  dashboardWsPort: env.DASHBOARD_WS_PORT,
+  dashboardHttpPort: env.DASHBOARD_HTTP_PORT,
 };
