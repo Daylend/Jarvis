@@ -1,7 +1,7 @@
 import type { Client, Message, VoiceBasedChannel, GuildTextBasedChannel } from 'discord.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } from 'discord.js';
 import { config } from '../config';
-import { toolRegistry } from './jarvis-tools';
+import { toolRegistry, type ToolSelectionContext } from './jarvis-tools';
 import { noteStore } from './note-store';
 import { skillStore } from './skill-store';
 import { personalityStore } from './personality-store';
@@ -63,6 +63,9 @@ interface JarvisLoopOpts {
   replyFn: (text: string) => Promise<void>;
   errorFn: (text: string) => Promise<void>;
   suppressEmptyFallback?: boolean;
+  source: ToolSelectionContext['source'];
+  textReplyAvailable?: boolean;
+  textReplyFn?: (text: string) => Promise<void>;
 }
 
 interface TriggerFirePayload {
@@ -276,7 +279,15 @@ async function requestApproval(
 }
 
 async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
-  const { client, historyKey, command, contextPreamble, textContext, guildId, channelId, replyFn, errorFn, suppressEmptyFallback } = opts;
+  const { client, historyKey, command, contextPreamble, textContext, guildId, channelId, replyFn, errorFn, suppressEmptyFallback, source, textReplyAvailable, textReplyFn } = opts;
+
+  const { sessionManager } = await import('./session-manager');
+  const inVoice = guildId ? !!sessionManager.get(guildId) : false;
+  const selectionCtx: ToolSelectionContext = {
+    source,
+    inVoice,
+    textReplyAvailable: !!textReplyAvailable,
+  };
 
   const prev = ownerLock.get(historyKey) ?? Promise.resolve();
   let releaseLock: () => void;
@@ -404,7 +415,7 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
       mindBus.emit('llm:iter', { key: historyKey, iter: iterCount, max: config.llmMaxToolLoop });
 
       try {
-        const { url, headers, body } = llmProviderStore.buildStreamRequest(messages, toolRegistry.getAllDefinitions());
+        const { url, headers, body } = llmProviderStore.buildStreamRequest(messages, toolRegistry.getDefinitionsFor(selectionCtx));
 
         const assistantMsg = await streamChatCompletion(url, headers, body, config.jarvisLlmTimeoutMs, {
           onFirstDelta: () => {
@@ -444,6 +455,18 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                 role: 'tool',
                 tool_call_id: tc.id,
                 content: `Tool "${toolName}" not found`,
+              });
+              continue;
+            }
+
+            if (!toolRegistry.isAvailable(toolName, selectionCtx)) {
+              mindBus.emit('llm:tool_request', { key: historyKey, name: toolName, args: {}, requiresApproval: false });
+              const msg = `Tool "${toolName}" is not available in this context.`;
+              mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: msg, ok: false });
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: msg,
               });
               continue;
             }
@@ -497,8 +520,9 @@ async function runJarvisLoop(opts: JarvisLoopOpts): Promise<void> {
                     console.error('[jarvis] Failed to clear persisted history:', err),
                   );
                 },
+                textReplyFn,
               });
-              if (toolName === 'send_dm' || toolName === 'speak_tts') toolDelivered = true;
+              if (toolName === 'send_dm' || toolName === 'speak_tts' || toolName === 'reply_in_chat') toolDelivered = true;
               mindBus.emit('llm:tool_result', { key: historyKey, name: toolName, result: result.slice(0, 2000), ok: true });
               mindState.patchSlice({ tool: { name: toolName, args, requiresApproval, result: result.slice(0, 2000) } });
               messages.push({
@@ -649,6 +673,7 @@ export function createJarvisHandler(client: Client): CommandHandler {
       channelId: payload.ctx.channelId,
       replyFn,
       errorFn: replyFn,
+      source: 'voice',
     });
   };
 }
@@ -732,6 +757,7 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
       replyFn,
       errorFn: replyFn,
       suppressEmptyFallback: occasion === 'phrase',
+      source: 'trigger',
     });
   };
 }
@@ -918,6 +944,7 @@ export async function handleDmJarvis(client: Client, message: Message): Promise<
     channelId,
     replyFn,
     errorFn: replyFn,
+    source: 'dm',
   });
 }
 
@@ -949,6 +976,7 @@ export async function handleMentionJarvis(client: Client, message: Message): Pro
   } catch {
     where = `Owner's message (via @mention): ${content}`;
   }
+  where += `\n\nYou were invoked via @mention in a text channel. Reply using the reply_in_chat tool (not speak_tts, not send_dm). Your reply will be posted back into this text channel.`;
 
   const replyFn = async (text: string) => {
     await message.reply(text);
@@ -964,5 +992,8 @@ export async function handleMentionJarvis(client: Client, message: Message): Pro
     channelId,
     replyFn,
     errorFn: replyFn,
+    source: 'mention',
+    textReplyAvailable: true,
+    textReplyFn: replyFn,
   });
 }

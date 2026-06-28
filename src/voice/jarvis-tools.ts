@@ -3,6 +3,12 @@ import { config } from '../config';
 import { transcriptStore } from './transcript-store';
 import { noteStore } from './note-store';
 
+export interface ToolSelectionContext {
+  source: 'voice' | 'dm' | 'mention' | 'trigger';
+  inVoice: boolean;
+  textReplyAvailable: boolean;
+}
+
 export interface JarvisTool {
   definition: {
     type: 'function';
@@ -13,6 +19,7 @@ export interface JarvisTool {
     };
   };
   requiresApproval?: boolean;
+  available?: (ctx: ToolSelectionContext) => boolean;
   execute: (args: Record<string, unknown>, context: ToolContext) => Promise<string>;
 }
 
@@ -22,6 +29,7 @@ export interface ToolContext {
   guildId: string;
   channelId: string;
   clearHistory?: () => void;
+  textReplyFn?: (text: string) => Promise<void>;
 }
 
 class ToolRegistry {
@@ -46,6 +54,18 @@ class ToolRegistry {
 
   getAllDefinitions(): Array<JarvisTool['definition']> {
     return this.getAll().map((t) => t.definition);
+  }
+
+  getDefinitionsFor(ctx: ToolSelectionContext): Array<JarvisTool['definition']> {
+    return this.getAll()
+      .filter((t) => !t.available || t.available(ctx))
+      .map((t) => t.definition);
+  }
+
+  isAvailable(name: string, ctx: ToolSelectionContext): boolean {
+    const tool = this.tools.get(name);
+    if (!tool) return false;
+    return !tool.available || tool.available(ctx);
   }
 }
 
@@ -91,6 +111,7 @@ toolRegistry.register({
       },
     },
   },
+  available: (ctx) => ctx.inVoice,
   async execute(args, context) {
     const text = args.text as string;
     const { sessionManager } = await import('./session-manager');
@@ -109,6 +130,34 @@ toolRegistry.register({
       console.error(`[jarvis-tools] speak_tts error:`, msg);
       return `TTS error: ${msg}`;
     }
+  },
+});
+
+toolRegistry.register({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'reply_in_chat',
+      description: 'Post a reply back into the text channel the owner @mentioned you in. Use this (not speak_tts) when the owner @mentioned you in a text channel. Plain text, no markdown. Chunked automatically for length.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The reply text to post in the text channel. Plain text only, no markdown or formatting.' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  available: (ctx) => ctx.textReplyAvailable,
+  async execute(args, context) {
+    const text = args.text as string;
+    if (!context.textReplyFn) {
+      return 'Error: no text channel reply available in this context.';
+    }
+    for (let i = 0; i < text.length; i += 2000) {
+      await context.textReplyFn(text.slice(i, i + 2000));
+    }
+    return 'delivered';
   },
 });
 
