@@ -10,7 +10,7 @@ import { conversationStore, type StoredChatMessage } from './conversation-store'
 import { streamChatCompletion } from './llm-stream';
 import { mindBus } from './mind-bus';
 import { mindState } from './mind-state';
-import type { HistoryMessage, SystemPromptParts, TransientFields, TurnSource, VoiceLine } from './mind-types';
+import type { HistoryMessage, SystemPromptParts, TextChatLine, TransientFields, TurnSource, VoiceLine } from './mind-types';
 import type { CommandHandler, JarvisPayload, SessionContext } from './action-router';
 
 const APPROVAL_TIMEOUT_MS = 30_000;
@@ -42,7 +42,7 @@ async function emitClearedContext(): Promise<void> {
     mindState.emitContext(
       structuredPrompt,
       [],
-      { time: formatCurrentTime(), members: [], voiceCtx: [], command: '' },
+      { time: formatCurrentTime(), members: [], voiceCtx: [], textCtx: [], command: '' },
       { used: 0, budget: tokenBudget },
     );
   } catch (err) {
@@ -193,7 +193,10 @@ function toHistoryMessages(msgs: StoredChatMessage[]): HistoryMessage[] {
 function parseTransient(userContent: string): TransientFields {
   const timeMatch = userContent.match(/^Current time: (.+)$/m);
   const time = timeMatch ? timeMatch[1] : '';
-  const voiceMatch = userContent.match(/\[VOICE CHANNEL\]\n([\s\S]*?)\n\n\[COMMAND\]/);
+  // Stop at the next section boundary (could be [TEXT CHANNEL] or [COMMAND]) so voice
+  // context still parses on mention turns that inject a [TEXT CHANNEL] block.
+  const voiceMatch = userContent.match(/\[VOICE CHANNEL\]\n([\s\S]*?)\n\n\[/);
+  const textMatch = userContent.match(/\[TEXT CHANNEL\]\n([\s\S]*?)\n\n\[/);
   const commandMatch = userContent.match(/\[COMMAND\]\n([\s\S]*)$/);
 
   const voiceCtx: VoiceLine[] = [];
@@ -211,10 +214,27 @@ function parseTransient(userContent: string): TransientFields {
       }
     }
   }
+
+  const textCtx: TextChatLine[] = [];
+  if (textMatch) {
+    for (const line of textMatch[1].split('\n')) {
+      const m = line.match(/^\[(.+?)\] (.+?): (.+)$/);
+      if (!m) continue;
+      const owner = m[2].endsWith('(Owner)');
+      textCtx.push({
+        stamp: m[1],
+        name: owner ? m[2].replace(' (Owner)', '') : m[2],
+        owner,
+        text: m[3],
+      });
+    }
+  }
+
   return {
     time,
     members: [],
     voiceCtx,
+    textCtx,
     command: commandMatch ? commandMatch[1] : userContent,
   };
 }

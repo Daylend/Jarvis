@@ -62,6 +62,18 @@
               {/each}
             {/if}
           </div>
+          {#if transient && transient.textCtx && transient.textCtx.length > 0}
+            <div class="trans__label">[TEXT CHANNEL] · recent chat</div>
+            <div class="trans__voice">
+              {#each transient.textCtx as c (c.stamp + c.name + c.text)}
+                <div class="trans__vline {c.owner ? 'owner' : ''}">
+                  <span class="ts">{c.stamp}</span>
+                  <span class="who {c.owner ? 'owner' : ''}">{c.name}:</span>
+                  <span class="txt">{c.text}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
           {#if transient && transient.command}
             <div class="trans__cmd"><b>[COMMAND]</b> {transient.command}</div>
           {/if}

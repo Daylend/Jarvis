@@ -43,6 +43,7 @@ const EMPTY_TRANSIENT: TransientFields = {
   time: '',
   members: [],
   voiceCtx: [],
+  textCtx: [],
   command: '',
 };
 

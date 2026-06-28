@@ -34,10 +34,18 @@ export interface VoiceLine {
   avatarUrl?: string;
 }
 
+export interface TextChatLine {
+  stamp: string;
+  name: string;
+  owner: boolean;
+  text: string;
+}
+
 export interface TransientFields {
   time: string;
   members: string[];
   voiceCtx: VoiceLine[];
+  textCtx: TextChatLine[];
   command: string;
 }
 
