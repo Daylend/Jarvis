@@ -1,7 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { mind } from '$lib/mindStore';
-  import type { VoiceLine } from '$lib/types';
   import SystemPrompt from './SystemPrompt.svelte';
   import PersistedHistory from './PersistedHistory.svelte';
   import Transient from './Transient.svelte';
@@ -21,9 +20,8 @@
   }
 
   // stick the feed to the bottom while a turn streams in (llm:dispatch + think/reply/tool)
-  // and while voice lines land in the transient block (transcript:final → voiceBuf)
-  $: reactGen($mind.gen.think, $mind.gen.reply, $mind.gen.tools, $mind.session.active, $mind.voiceBuf, $mind.transient);
-  function reactGen(_a: string, _b: string, _c: unknown[], _active: boolean, _buf: VoiceLine[], _trans: unknown) {
+  $: reactGen($mind.gen.think, $mind.gen.reply, $mind.gen.tools, $mind.session.active);
+  function reactGen(_a: string, _b: string, _c: unknown[], _active: boolean) {
     if (!browser || !feedEl || !stick) return;
     requestAnimationFrame(() => {
       if (feedEl) feedEl.scrollTop = feedEl.scrollHeight;

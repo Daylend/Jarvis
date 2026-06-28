@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from '$app/environment';
   import { esc } from '$lib/util';
   import { mind } from '$lib/mindStore';
   import type { TransientFields, VoiceLine } from '$lib/types';
@@ -7,6 +8,25 @@
   let open = true;
 
   $: voiceBuf = $mind.voiceBuf;
+
+  let voiceEl: HTMLElement;
+  let stickVoice = true;
+
+  function onVoiceScroll() {
+    if (!voiceEl) return;
+    stickVoice = voiceEl.scrollTop + voiceEl.clientHeight + 24 >= voiceEl.scrollHeight;
+  }
+
+  // the voice log is its own scroll container (overflow-y:auto, flex:1). stick it to
+  // the bottom as lines stream in — otherwise new lines hide below the fold, which the
+  // multiline [COMMAND] box (which shrinks this panel's flex height) makes worse.
+  $: reactVoice($mind.voiceBuf, open);
+  function reactVoice(_buf: VoiceLine[], _open: boolean) {
+    if (!browser || !voiceEl || !stickVoice) return;
+    requestAnimationFrame(() => {
+      if (voiceEl) voiceEl.scrollTop = voiceEl.scrollHeight;
+    });
+  }
 </script>
 
 <div class="ctx-sec ctx-sec--fill" class:open={open}>
@@ -29,7 +49,7 @@
           {:else}
             <div class="trans__label">[VOICE CHANNEL]</div>
           {/if}
-          <div class="trans__voice">
+          <div class="trans__voice" bind:this={voiceEl} on:scroll={onVoiceScroll}>
             {#if voiceBuf.length === 0}
               <span class="muted">(silent)</span>
             {:else}
