@@ -163,7 +163,7 @@ class StreamState:
             return
         if snapshot != self._revision:
             return  # speech resumed between inference and close
-        seg = self.vad.force_close_segment()
+        seg = self.vad.force_close_segment(provisional=True)
         if seg is None:
             return
         logger.info("[stream %d] smart-turn complete (p=%.3f) — provisional close",

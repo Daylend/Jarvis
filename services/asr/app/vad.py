@@ -50,11 +50,8 @@ class VadState:
         self._on_trigger_silence = cb
 
     def reset(self) -> None:
-        self._in_speech = False
-        self._speech_start_sample = 0
-        self._last_speech_sample = 0
+        self._reset_speech_flags()
         self._remainder = np.empty(0, dtype=np.float32)
-        self._triggered_this_silence = False
         self._model.reset_states()
 
     def accept(self, audio: np.ndarray, absolute_start_sample: int) -> list[Segment]:
@@ -152,9 +149,18 @@ class VadState:
         self._reset_speech()
         return seg
 
-    def force_close_segment(self) -> Segment | None:
+    def force_close_segment(self, *, provisional: bool = False) -> Segment | None:
         """Close the current speech segment immediately (Smart Turn candidate /
-        watchdog hard-silence). Returns None if not in speech or too short."""
+        watchdog hard-silence). Returns None if not in speech or too short.
+
+        When `provisional` is True (a revocable Smart Turn close), the Silero
+        RNN states are NOT reset. A wrong "turn complete" guess must not clip
+        the leading audio of resumed speech: warm states re-detect the next
+        voiced frame immediately instead of ramping from a reset baseline (the
+        cold-start onset gap that drops leading consonants). A subsequent
+        definitive close (hard-silence, max-utt, flush) still does the full
+        reset, so state never leaks across truly-separate utterances.
+        """
         if not self._in_speech:
             return None
         speech_duration = self._last_speech_sample - self._speech_start_sample
@@ -163,10 +169,14 @@ class VadState:
             return None
         end = self._last_speech_sample + self._pad_samples
         seg = Segment(self._speech_start_sample, end)
-        logger.info("[vad %d] force-close segment: %d-%d (%.1fs)",
+        logger.info("[vad %d] force-close segment: %d-%d (%.1fs)%s",
                     self.stream_id, self._speech_start_sample, end,
-                    (end - self._speech_start_sample) / settings.sample_rate)
-        self._reset_speech()
+                    (end - self._speech_start_sample) / settings.sample_rate,
+                    " [provisional, states preserved]" if provisional else "")
+        if provisional:
+            self._reset_speech_flags()
+        else:
+            self._reset_speech()
         return seg
 
     @property
@@ -181,9 +191,12 @@ class VadState:
     def last_speech_sample(self) -> int:
         return self._last_speech_sample
 
-    def _reset_speech(self) -> None:
+    def _reset_speech_flags(self) -> None:
         self._in_speech = False
         self._speech_start_sample = 0
         self._last_speech_sample = 0
         self._triggered_this_silence = False
+
+    def _reset_speech(self) -> None:
+        self._reset_speech_flags()
         self._model.reset_states()
