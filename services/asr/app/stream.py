@@ -179,8 +179,9 @@ class StreamState:
         if event is None:
             return
         # Speech may have resumed during Granite transcription. If so, drop the
-        # provisional final — the resumed run becomes a new segment/lineId, and
-        # the bot never receives a final for the abandoned prefix.
+        # provisional final — the turn anchor is preserved in the VAD, so the
+        # resumed run's eventual definitive close will slice the full utterance
+        # (prefix included) and recover what this dropped transcription carried.
         if snapshot != self._revision:
             logger.info("[stream %d] smart-turn provisional dropped — speech resumed during transcription",
                         self.stream_id)
@@ -223,6 +224,15 @@ class StreamState:
         if self._watchdog_task is None:
             self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
+        # A provisional final that survived its grace window without a reopen
+        # has committed. End the logical turn NOW — before VAD processes this
+        # chunk — so any speech starting here captures a fresh anchor instead of
+        # merging into the just-committed utterance.
+        if self._smart_turn_enabled and self._candidate is not None:
+            if time.monotonic() >= self._candidate["deadline"]:
+                self._candidate = None
+                self.vad.end_turn()
+
         segments = self.vad.accept(audio, abs_start)
 
         # --- Smart Turn bookkeeping (only when enabled) ---
@@ -238,14 +248,6 @@ class StreamState:
             if cur_in_speech:
                 self._current_turn_pcm.append(audio)
             self._prev_in_speech = cur_in_speech
-
-            # Expire a candidate that survived its grace window without a
-            # reopen — the bot has already committed it.
-            if (
-                self._candidate is not None
-                and time.monotonic() >= self._candidate["deadline"]
-            ):
-                self._candidate = None
 
         events: list[dict] = []
         for seg in segments:

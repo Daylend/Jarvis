@@ -38,6 +38,13 @@ class VadState:
         # the padded segment span, and log onset confidence.
         self._onset_sample: int = 0
         self._onset_prob: float = 0.0
+        # Logical turn anchor. A Smart Turn provisional close reopens the turn
+        # (speech may resume); the anchor is the ORIGINAL speech start of the
+        # turn, preserved across provisional reopens so the eventual definitive
+        # close slices the full utterance — including any prefix that was
+        # transcribed-then-dropped on a false "turn complete". Reset only when
+        # the turn truly ends (definitive close, or a provisional that commits).
+        self._turn_open: bool = False
         self._pad_samples = int(settings.vad_speech_pad_ms * settings.sample_rate / 1000)
         self._min_silence_samples = int(settings.vad_min_silence_ms * settings.sample_rate / 1000)
         self._min_speech_samples = int(settings.vad_min_speech_ms * settings.sample_rate / 1000)
@@ -101,9 +108,15 @@ class VadState:
             if prob >= settings.vad_threshold:
                 if not self._in_speech:
                     self._in_speech = True
-                    self._speech_start_sample = max(0, frame_start - self._pad_samples)
-                    self._onset_sample = frame_start
-                    self._onset_prob = prob
+                    if not self._turn_open:
+                        # Fresh logical turn — capture the anchor. When resuming
+                        # within an already-open turn (after a provisional close
+                        # whose prefix we must recover), keep the original anchor
+                        # so a later close slices the full utterance.
+                        self._speech_start_sample = max(0, frame_start - self._pad_samples)
+                        self._onset_sample = frame_start
+                        self._onset_prob = prob
+                        self._turn_open = True
                     logger.info("[vad %d] speech START at sample %d (prob=%.3f)",
                                 self.stream_id, frame_start, prob)
                 self._last_speech_sample = frame_end
@@ -186,6 +199,12 @@ class VadState:
         cold-start onset gap that drops leading consonants). A subsequent
         definitive close (hard-silence, max-utt, flush) still does the full
         reset, so state never leaks across truly-separate utterances.
+
+        The turn anchor is also preserved on a provisional close: a resumed run
+        keeps the original speech start so the eventual definitive transcription
+        covers the full utterance (no orphaned prefix when a false "turn
+        complete" is dropped). Only `_in_speech` and the silence trigger flag
+        are cleared.
         """
         if not self._in_speech:
             return None
@@ -200,10 +219,22 @@ class VadState:
                     (end - self._speech_start_sample) / settings.sample_rate,
                     " [provisional, states preserved]" if provisional else "")
         if provisional:
-            self._reset_speech_flags()
+            self._soft_reset_speech_flags()
         else:
             self._reset_speech()
         return seg
+
+    def end_turn(self) -> None:
+        """End the logical turn without emitting a VAD segment — used when a
+        provisional final commits via the Smart Turn grace window (no reopen).
+        Clears the anchor so the next utterance captures a fresh start instead
+        of merging into the already-committed one. Leaves Silero RNN states and
+        `_in_speech` untouched (a committed provisional already exited speech)."""
+        self._turn_open = False
+        self._speech_start_sample = 0
+        self._onset_sample = 0
+        self._onset_prob = 0.0
+        self._last_speech_sample = 0
 
     @property
     def in_speech(self) -> bool:
@@ -217,6 +248,15 @@ class VadState:
     def last_speech_sample(self) -> int:
         return self._last_speech_sample
 
+    def _soft_reset_speech_flags(self) -> None:
+        """Provisional close: leave the logical turn open. Only exit the
+        in-speech run (so Silero warm states can re-detect resumed speech) and
+        re-arm the silence trigger. The turn anchor is preserved so a later
+        close recovers any prefix transcribed-then-dropped on a false 'turn
+        complete'."""
+        self._in_speech = False
+        self._triggered_this_silence = False
+
     def _reset_speech_flags(self) -> None:
         self._in_speech = False
         self._speech_start_sample = 0
@@ -224,6 +264,7 @@ class VadState:
         self._onset_sample = 0
         self._onset_prob = 0.0
         self._triggered_this_silence = False
+        self._turn_open = False
 
     def _reset_speech(self) -> None:
         self._reset_speech_flags()
