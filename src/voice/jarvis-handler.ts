@@ -744,6 +744,18 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
       channelId = '';
     }
 
+    // Gather the rolling voice-channel transcript block so trigger-fired turns
+    // (phrase / time / skill-autostart) see recent voice context — matching the
+    // owner-voice / DM / @mention paths. Returns empty strings when not in a
+    // session, so out-of-voice triggers keep a null preamble (no behavior
+    // change). Also repopulates the dashboard transient pane, which was being
+    // wiped because parseTransient found no [VOICE CHANNEL] block to parse.
+    let contextPreamble: string | null = null;
+    if (inVoice) {
+      const voiceContext = await gatherVoiceContext(client);
+      contextPreamble = buildContextPreamble(voiceContext.memberList, voiceContext.contextBlock);
+    }
+
     const historyKey = ownerHistoryKey();
 
     const voiceLine = inVoice
@@ -770,7 +782,7 @@ export function createTriggerFirer(client: Client): (payload: TriggerFirePayload
       client,
       historyKey,
       command,
-      contextPreamble: null,
+      contextPreamble,
       textContext: null,
       guildId,
       channelId,
