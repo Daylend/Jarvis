@@ -82,6 +82,7 @@ The sidecar supports swappable transcription backends via `ASR_ENGINE` (env var)
 | Engine | Default | Model | Backend |
 |---|---|---|---|
 | `granite` | ✅ | granite-speech-4.1-2b | llama-cpp HTTP (`/v1/audio/transcriptions`) |
+| `qwen3` | | qwen3-asr-1.7b | llama-cpp HTTP (`/v1/audio/transcriptions`) |
 | `whisper` | | `openai/whisper-large-v3-turbo` | Local ROCm GPU (transformers) |
 
 Only the selected engine is imported at runtime — selecting `granite` never loads torch-whisper.
@@ -113,7 +114,7 @@ OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 **Sidecar env vars:**
 
 ```env
-ASR_ENGINE=granite                     # granite | whisper (default: granite)
+ASR_ENGINE=granite                     # granite | qwen3 | whisper (default: granite)
 
 # Granite / OpenAI-compatible
 ASR_OPENAI_BASE_URL=http://llama-cpp:8080/v1
@@ -121,6 +122,14 @@ ASR_GRANITE_MODEL=/models/granite-speech-4.1-2b-Q6_K.gguf
 ASR_GRANITE_PROMPT=transcribe the speech with proper punctuation and capitalization.
 ASR_GRANITE_MAX_CONCURRENCY=4
 ASR_GRANITE_TIMEOUT_S=30
+
+# Qwen3-ASR (when ASR_ENGINE=qwen3; same llama-cpp endpoint as Granite)
+# No instruction prompt is sent (the chat template handles prompting); the raw
+# output's `language <X><asr_text>` marker is stripped by the engine. No
+# server-side language forcing — the model auto-detects language.
+ASR_QWEN3_MODEL=/models/qwen3-asr-1.7b.gguf
+ASR_QWEN3_MAX_CONCURRENCY=4
+ASR_QWEN3_TIMEOUT_S=30
 
 # Whisper (when ASR_ENGINE=whisper)
 ASR_MODEL_ID=openai/whisper-large-v3-turbo
@@ -148,6 +157,13 @@ For Whisper (requires ROCm GPU):
 
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.whisper.yml up
+```
+
+For Qwen3-ASR, reuse the Granite overlay (same llama-cpp endpoint) and override the engine/model:
+
+```bash
+ASR_ENGINE=qwen3 ASR_QWEN3_MODEL=/models/qwen3-asr-1.7b.gguf \
+  docker compose -f docker/docker-compose.yml -f docker/docker-compose.granite.yml up
 ```
 
 The sidecar exposes `ws://asr:8765/ws/transcribe` and `http://asr:8765/healthz`.

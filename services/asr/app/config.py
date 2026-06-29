@@ -31,6 +31,13 @@ class Settings(BaseModel):
     granite_max_concurrency: int = int(os.getenv("ASR_GRANITE_MAX_CONCURRENCY", "4"))
     granite_timeout_s: float = float(os.getenv("ASR_GRANITE_TIMEOUT_S", "30"))
 
+    # --- Qwen3-ASR settings (same llama-cpp endpoint as Granite, no instruction
+    # prompt; raw output carries a `language <X><asr_text>` marker that the engine
+    # strips). No server-side language forcing — parse-only. ---
+    qwen3_model: str = os.getenv("ASR_QWEN3_MODEL", "/models/qwen3-asr-1.7b.gguf")
+    qwen3_max_concurrency: int = int(os.getenv("ASR_QWEN3_MAX_CONCURRENCY", "4"))
+    qwen3_timeout_s: float = float(os.getenv("ASR_QWEN3_TIMEOUT_S", "30"))
+
     # --- Shared ---
     port: int = int(os.getenv("ASR_PORT", "8765"))
     enable_partials: bool = os.getenv("ASR_ENABLE_PARTIALS", "false").lower() == "true"

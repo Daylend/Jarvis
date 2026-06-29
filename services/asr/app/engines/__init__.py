@@ -17,6 +17,9 @@ def get_engine() -> Engine:
         elif eng in ("granite", "openai"):
             from .granite import GraniteEngine
             _engine = GraniteEngine()
+        elif eng == "qwen3":
+            from .qwen3 import Qwen3Engine
+            _engine = Qwen3Engine()
         else:
             raise ValueError(f"Unknown ASR_ENGINE={settings.engine!r}")
     return _engine
