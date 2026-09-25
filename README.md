@@ -1,6 +1,6 @@
-# PaxFax Discord Bot
+# Jarvis Discord Bot
 
-PaxFax is a Jarvis-focused Discord bot built with Node.js, TypeScript, and Prisma (SQLite). It centers on live voice transcription, an LLM-driven assistant (Jarvis), and TTS, with a quippy quote personality for non-owner @mentions.
+Jarvis is a voice-first Discord assistant built with Node.js, TypeScript, and Prisma (SQLite). It centers on live voice transcription, an LLM-driven assistant (Jarvis), and TTS, with a quippy quote personality for non-owner @mentions.
 
 ## Features
 

@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PaxFax TTS Sidecar")
+app = FastAPI(title="Jarvis TTS Sidecar")
 
 
 class TtsRequest(BaseModel):

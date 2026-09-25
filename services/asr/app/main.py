@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down ASR sidecar.")
 
 
-app = FastAPI(title="PaxFax ASR Sidecar", lifespan=lifespan)
+app = FastAPI(title="Jarvis ASR Sidecar", lifespan=lifespan)
 
 
 @app.get("/healthz")

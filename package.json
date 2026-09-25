@@ -1,7 +1,7 @@
 {
-  "name": "paxfax",
+  "name": "jarvis",
   "version": "1.0.0",
-  "description": "Discord bot for PaxFax",
+  "description": "Voice-first Jarvis Discord assistant",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
