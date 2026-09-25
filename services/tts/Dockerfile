@@ -8,7 +8,7 @@ ENV HF_HOME=/models/hf
 ENV TORCH_HOME=/models/torch
 ENV TTS_DEVICE=cuda:0
 ENV TTS_PORT=8860
-ENV TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+ENV TTS_REF_AUDIO=/app/voice_samples/reference.wav
 ENV TTS_VOCODER_NAME=vocos
 # EPSS step count: must be one of {5,6,7,10,12,16} or EPSS falls back to uniform linspace.
 # 12=baseline, 10=balanced, 7=fastest (validate on voice clones before deploying 7).
@@ -42,10 +42,11 @@ RUN python -m pip install --upgrade pip wheel setuptools \
          --index-url https://download.pytorch.org/whl/cpu \
          "torchcodec==0.2.*"
 
-COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
 COPY services/tts/app /app/app
 
-RUN mkdir -p /app/data /models/hf /models/torch \
+# Reference audio (TTS_REF_AUDIO) is mounted into /app/voice_samples at runtime,
+# or pointed at any path via the env var.
+RUN mkdir -p /app/data /app/voice_samples /models/hf /models/torch \
     && chmod -R 777 /app/data /models
 
 EXPOSE 8860

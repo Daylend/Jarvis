@@ -2,7 +2,7 @@ import os
 
 
 TTS_DEVICE = os.getenv("TTS_DEVICE", "cuda:0")
-TTS_REF_AUDIO = os.getenv("TTS_REF_AUDIO", "/app/voice_samples/ultron.mp3")
+TTS_REF_AUDIO = os.getenv("TTS_REF_AUDIO", "/app/voice_samples/reference.wav")
 TTS_REF_TEXT = os.getenv(
     "TTS_REF_TEXT",
     "I'm sorry I know you mean well... You just didn't think it through.",

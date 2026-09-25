@@ -8,4 +8,5 @@ prisma/*.db
 prisma/*.db-journal
 .kilo/*
 plans/
+voice_samples/
 __pycache__/

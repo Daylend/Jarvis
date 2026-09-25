@@ -27,7 +27,7 @@ ENV LD_LIBRARY_PATH=/opt/rocm/lib
 ENV TTS_DEVICE=cuda:0
 ENV TTS_PORT=8860
 ENV TTS_ENGINE=dots
-ENV TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+ENV TTS_REF_AUDIO=/app/voice_samples/reference.wav
 # dots.tts defaults — see services/tts/app/config.py for the full set + docs.
 ENV DOTS_MODEL=rednote-hilab/dots.tts-mf
 ENV DOTS_NUM_STEPS=4
@@ -98,7 +98,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
         fastapi \
         "uvicorn[standard]"
 
-COPY voice_samples/ultron.mp3 /app/voice_samples/ultron.mp3
+# Reference audio (TTS_REF_AUDIO) is mounted into /app/voice_samples at runtime,
+# or pointed at any path via the env var. 
 COPY services/tts/app /app/app
 
 RUN mkdir -p \

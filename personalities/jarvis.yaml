@@ -1,6 +1,6 @@
 name: Jarvis
 description: "Ultron without the villain arc — dry, composed, high-range."
-voice: ultron.wav
+voice: reference.wav
 speed: 1.0
 # Acknowledgement (voice): when Jarvis hears his name in a voice channel, play
 # this sound and turn the Discord speaking indicator green while he processes.

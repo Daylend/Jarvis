@@ -5,6 +5,8 @@ stages:
   - build
 
 variables:
+  # Container registry to push to. Override by setting a DOCKER_REGISTRY
+  # variable in the project's CI/CD settings (UI variables win over this file).
   DOCKER_REGISTRY: registry.example.com
 
   # Bot image

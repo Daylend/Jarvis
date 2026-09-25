@@ -1,6 +1,6 @@
 services:
   paxfax:
-    image: registry.example.com/paxfax:latest
+    image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax:latest
     container_name: paxfax
     restart: unless-stopped
     volumes:
@@ -62,7 +62,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   dashboard:
-    image: registry.example.com/paxfax-dashboard:latest
+    image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax-dashboard:latest
     container_name: paxfax-dashboard
     restart: unless-stopped
     environment:
@@ -82,7 +82,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   asr:
-    image: registry.example.com/paxfax-asr-whisper:latest
+    image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax-asr-whisper:latest
     container_name: paxfax-asr-whisper
     restart: unless-stopped
     devices:
@@ -133,9 +133,9 @@ services:
   tts:
     # To use Chatterbox Turbo, switch image tag below and set TTS_ENGINE=chatterbox
     # To use dots.tts, switch image tag to paxfax-tts-dots:latest and set TTS_ENGINE=dots
-    image: registry.example.com/paxfax-tts:latest
-    # image: registry.example.com/paxfax-tts-chatterbox:latest
-    # image: registry.example.com/paxfax-tts-dots:latest
+    image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax-tts:latest
+    # image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax-tts-chatterbox:latest
+    # image: ${DOCKER_REGISTRY:-registry.example.com}/paxfax-tts-dots:latest
     container_name: paxfax-tts
     restart: unless-stopped
     devices:
@@ -153,8 +153,8 @@ services:
       - TTS_ENGINE=${TTS_ENGINE:-f5}
       - TTS_DEVICE=cuda:0
       # Chatterbox requires mp3; F5/dots.tts accept wav or mp3. Override
-      # TTS_REF_AUDIO (e.g. /app/voice_samples/ultron.mp3) when TTS_ENGINE=chatterbox.
-      - TTS_REF_AUDIO=${TTS_REF_AUDIO:-/app/voice_samples/ultron.wav}
+      # TTS_REF_AUDIO (e.g. /app/voice_samples/reference.wav) when TTS_ENGINE=chatterbox.
+      - TTS_REF_AUDIO=${TTS_REF_AUDIO:-/app/voice_samples/reference.wav}
       - HF_HOME=/models/hf
       - TORCH_HOME=/models/torch
       # F5-TTS specific config (ignored if TTS_ENGINE != f5)

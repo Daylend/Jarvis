@@ -68,7 +68,7 @@ services:
     restart: unless-stopped
     environment:
       - TTS_DEVICE=cpu
-      - TTS_REF_AUDIO=/app/voice_samples/ultron.mp3
+      - TTS_REF_AUDIO=/app/voice_samples/reference.wav
       - TTS_VOCODER_NAME=vocos
     volumes:
       - ../data:/app/data
